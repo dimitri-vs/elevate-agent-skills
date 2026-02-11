@@ -1,4 +1,4 @@
-# Claude Skills Repository
+# Elevate Agent Skills
 
 Central repository for reusable skills for Claude Code and Codex CLI. Skills are synced to projects using `skill-sync.py`. Both `.claude/skills/` and `.codex/skills/` target directories are supported.
 

@@ -80,7 +80,7 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 ## Usage
 
-**Important:** Always quote paths containing backslashes or spaces.
+**Important (Windows):** Always quote paths containing backslashes or spaces.
 
 ```bash
 # Fast lookup (default) — a sentence or two

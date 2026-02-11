@@ -323,7 +323,7 @@ def cmd_status(args) -> int:
 
     if not installations:
         print("No skills registered. Use 'add' to register skills.")
-        print(f"\nAvailable skills to add: {', '.join(available)}")
+        print(f"\nAvailable skills to add: {', '.join(s['name'] for s in available)}")
         return 0
 
     for skill_name in sorted(installations.keys()):

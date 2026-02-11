@@ -140,20 +140,20 @@ def get_api_key() -> str:
     Raises:
         SystemExit if no key found
     """
-    # Try loading from local .env first
-    env_path = Path.cwd() / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-
-    # Also try user home .env as fallback
-    home_env = Path.home() / ".env"
-    if home_env.exists():
-        load_dotenv(home_env)
-
-    # Try skill directory .env
+    # Load in reverse priority order with override=True so highest-priority
+    # file wins (last loaded overrides earlier ones and system env vars).
+    # Priority: local .env > home .env > skill dir .env > system env
     skill_env = Path(__file__).parent / ".env"
     if skill_env.exists():
-        load_dotenv(skill_env)
+        load_dotenv(skill_env, override=True)
+
+    home_env = Path.home() / ".env"
+    if home_env.exists():
+        load_dotenv(home_env, override=True)
+
+    env_path = Path.cwd() / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
 
     api_key = os.getenv("OPENAI_API_KEY")
 
