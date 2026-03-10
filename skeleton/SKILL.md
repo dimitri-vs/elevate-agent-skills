@@ -15,6 +15,22 @@ This index is the **source of truth** for Skeleton documentation. When invoked:
 
 **Do NOT guess URLs** - always use this index to find the correct documentation paths.
 
+## Common Gotchas
+
+**v3→v4 migration**: The `-token` suffix utility classes (e.g., `bg-surface-100-800-token`) are a **v3 pattern that produces zero CSS in v4**. They silently render as transparent. In v4, use preset classes (`preset-filled-surface-100-900`) or Tailwind's `dark:` variant (`bg-surface-100 dark:bg-surface-800`).
+
+**@tailwindcss/forms is required**: Skeleton v4 does NOT style form inputs by default. You MUST install and import the Tailwind Forms plugin, or `.input`/`.textarea`/`.select` will have no borders or backgrounds. Add `@plugin '@tailwindcss/forms';` to your CSS after the `@import 'tailwindcss'` line.
+
+**Windows rendering fix**: On Windows browsers, form elements may render incorrectly. Add this CSS globally:
+```css
+.select, .input, .textarea, .input-group {
+  background-color: var(--color-surface-50-950);
+  color: var(--color-surface-950-50);
+}
+```
+
+**Use preset classes for cards/backgrounds**: Don't hand-roll `bg-surface-*` with `dark:` variants for cards. Use Skeleton's built-in presets which handle light/dark internally: `preset-filled-surface-100-900` (background), `preset-outlined-surface-300-700` (border). See the [Cards docs](/docs/svelte/tailwind-components/cards.md).
+
 ---
 
 ## Svelte

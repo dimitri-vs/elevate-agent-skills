@@ -1,6 +1,6 @@
 ---
 name: web-research
-description: Perform web research using OpenAI APIs. Fast mode uses gpt-5-search-api for quick lookups. Normal/deep modes use o3-deep-research model for comprehensive multi-step research with code interpreter. Invoke when user needs current web information or thorough research on a topic.
+description: Perform web research using OpenAI APIs. Fast mode uses gpt-5 with web_search and low reasoning for quick lookups (~1-2 min). Normal/deep modes use o3-deep-research model for comprehensive multi-step research with code interpreter. Invoke when user needs current web information or thorough research on a topic.
 ---
 
 # Web Research Skill
@@ -9,11 +9,24 @@ Perform web research at three depth levels using OpenAI's APIs.
 
 ## Choosing the Right Depth
 
+> **IMPORTANT — Interpreting depth when the user asks for "deep research":**
+>
+> "Deep research" is the name of the feature — it does **not** automatically mean deep *depth*. When the user says "do deep research", the decision between **normal** and **deep** depth is on a razor's edge — it could genuinely go either way, and it's up to the agent to judge.
+>
+> The baseline when nothing else is said is **normal**. But the bar to tip into **deep** is very low — any additional language like "thorough", "deep-level", "comprehensive", "exhaustive", "leave no stone unturned", or anything at all hinting the user wants more than a standard research pass, immediately means **deep** depth.
+>
+> - "Do deep research on X" → **normal**
+> - "Do some really thorough deep research on X" → **deep**
+> - "I need a comprehensive look at X" → **deep**
+> - "Research X in depth, cover every angle" → **deep**
+>
+> **Fast mode should only be used when** the user asks for a quick lookup, or doesn't specify any depth preference and the query is clearly a simple factual retrieval.
+
 The key question: **Are you retrieving information or exploring a topic?**
 
-### Fast (10-60 sec) — Retrieval
+### Fast (~1-2 min) — Retrieval
 
-Use when you'd normally Google something, open a few links, and get your answer. You generally know what you're looking for; you just need current data or quick verification.
+Uses gpt-5 via the Responses API with `web_search` tool and low reasoning effort. Searches the web then synthesizes results with lightweight reasoning — substantially better than a raw search snippet. Use when you'd normally Google something, open a few links, and get your answer.
 
 **Good for:**
 - Current facts (prices, dates, events)
@@ -72,7 +85,7 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 | Depth | Model | Time | Max Tool Calls |
 |-------|-------|------|----------------|
-| **fast** | gpt-5-search-api | 10-60 sec | — |
+| **fast** | gpt-5 + web_search | ~1-2 min | — |
 | **normal** | o3-deep-research | 2-6 min | 25 |
 | **deep** | o3-deep-research | 6-14 min | unlimited |
 
@@ -82,14 +95,20 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 **Important (Windows):** Always quote paths containing backslashes or spaces.
 
+> **CRITICAL — Bash timeout:** The default Bash timeout (2 min) is too short for research calls. You MUST:
+> - **Fast:** Set `timeout: 300000` (5 min) or use `run_in_background: true`
+> - **Normal / Deep:** Use `run_in_background: true`
+
 ```bash
 # Fast lookup (default) — a sentence or two
 cd "<skill-directory>" && uv run research.py "What is the current price of Bitcoin?"
 
 # Normal research — roughly a paragraph of context
+# ⚠️ Use timeout: 600000 or run_in_background: true
 cd "<skill-directory>" && uv run research.py -d normal "I'm building a FastAPI app and trying to decide on an async database approach. What are the current best practices for async database connections with SQLAlchemy 2.0? I'm particularly interested in connection pooling, session management, and whether to use encode/databases or native SQLAlchemy async."
 
 # Deep research — two paragraphs of detailed context
+# ⚠️ Use timeout: 600000 or run_in_background: true
 cd "<skill-directory>" && uv run research.py -d deep "I have a Carrier 40MHHQ09 mini-split (which is a rebadged Midea unit) and want to integrate it with Home Assistant. I've seen mentions of the US-SK105 Midea Wi-Fi dongle and ESPHome-based solutions but I'm not sure which approach is more reliable or if they even work with Carrier-branded units. [...]
 
 Compare these options and include: (1) compatibility confirmation for Carrier 40MHH series, (2) Midea AC LAN HACS integration setup and reliability, (3) ESPHome alternatives, (4) USB port location, and (5) whether the solution reads actual unit state vs just sending commands. [...]"

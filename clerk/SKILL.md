@@ -179,7 +179,7 @@ See Clerk's JWT Templates documentation for setup.
 | Scenario | Risk | Mitigation |
 |----------|------|------------|
 | Social login email changes | Account conflicts | Handle email linking carefully |
-| Default 7-day sessions | May be too long for sensitive apps | Configure shorter duration (Pro feature) |
+| Default 7-day sessions | May be too long for sensitive apps | Configure shorter duration (requires Pro) |
 | Clerk service outage | App auth fails | Add graceful error handling |
 | User deletion requests | Data in your DB remains | Delete/anonymize associated data |
 
@@ -196,55 +196,73 @@ See Clerk's JWT Templates documentation for setup.
 
 ## Pricing Tiers
 
-### Free Tier
+*Updated Feb 2026 — [changelog](https://clerk.com/changelog/2026-02-05-new-plans-more-value). Clerk now uses **MRU** (Monthly Retained Users) instead of MAU — a user counts as retained when they return 24+ hours after signing up.*
+
+### Free (Hobby) Tier
 
 | Feature | Limit |
 |---------|-------|
-| Monthly Active Users (MAUs) | 10,000 |
-| Monthly Active Organizations | 100 |
-| Email/password auth | Included |
-| Social logins (Google, GitHub, etc.) | Included |
-| Passwordless (magic links) | Included |
+| MRU per app | 50,000 |
+| Applications | Unlimited |
+| Dashboard seats | 3 |
+| Social connections (Google, GitHub, etc.) | Up to 3 |
+| Email/password, magic links, passkeys | Included |
 | Pre-built UI components | Included |
 | Custom domain | Included |
+| User impersonations | 5/month |
+| Session lifetime | Fixed at 7 days (not configurable) |
+| SMS authentication | Not included |
 | Clerk branding | Required (cannot remove) |
 
-**Note**: "Monthly active" = only users who log in count. Dormant accounts are free. All features testable in dev mode.
+**Note**: Dormant accounts don't count toward MRU. All features testable in dev mode.
 
-### Pro Tier (~$25/month base)
+### Pro Tier ($25/month or $20/month annual)
 
-| Feature | Cost |
-|---------|------|
-| Base | ~$25/month |
-| Beyond 10k MAUs | $0.02 per MAU |
-| Beyond 100 orgs | $1 per MAO |
+| Feature | Detail |
+|---------|--------|
+| MRU included | 50,000 per app |
+| MRU overage | $0.02/MRU (50k-100k), $0.018 (100k-1M), $0.015 (1M-10M), $0.012 (10M+) |
+| Enterprise SSO connections | 1 included, $75/mo each additional |
+| Dashboard seats | 3 |
 
-**Pro unlocks:**
+**Pro unlocks (over Free):**
 - Remove Clerk branding
-- Allowlist/blocklist (restrict sign-ups by domain)
+- MFA (TOTP, SMS OTP, backup codes)
+- Passkeys
+- Satellite domains
+- Simultaneous sessions
 - Custom session duration
-- Email support (vs Discord-only for free)
+- Custom email/SMS templates
+- User bans
+- Allowlist/blocklist (restrict sign-ups by domain)
 
-### Add-Ons ($100/month each)
+### Business Tier ($300/month or $250/month annual)
 
-**Enhanced Authentication:**
-- MFA (SMS OTP, TOTP apps, backup codes)
-- Device management
-- Enterprise SSO (SAML, OIDC - Okta, Azure AD)
-- Satellite domains (multiple custom domains)
+| Feature | Detail |
+|---------|--------|
+| Dashboard seats | 10 included, $20/mo each additional |
+| Compliance | SOC 2 Report & HIPAA |
+| Support | Priority email |
 
-**Enhanced Administration:**
-- User impersonation (for support)
+**Business unlocks (over Pro):**
+- Enhanced dashboard roles
 - Audit logs (coming soon)
-- Custom dashboard roles (coming soon)
+- SOC 2 & HIPAA compliance artifacts
+
+### Enterprise Tier (Custom, annual only)
+
+- Committed use discounts
+- 99.99% uptime SLA
+- Premium support with dedicated Slack channel
+- Onboarding/migration support
 
 ### Pricing Strategy
 
-1. **Start on Free** - Generous for development and early launch
-2. **Upgrade to Pro** - When you exceed 10k MAUs or need branding removal
-3. **Add Enhanced Auth** - Only if you need MFA/SSO for enterprise clients
+1. **Start on Free** — Very generous for development and early launch (50k MRU)
+2. **Upgrade to Pro** — When you need MFA, branding removal, custom sessions, or enterprise SSO
+3. **Upgrade to Business** — When you need 4+ dashboard seats or SOC 2/HIPAA compliance
 
-**Watch out for**: Features you test in dev mode may require paid add-ons in production. Check before depending on MFA or SSO.
+**Watch out for**: Enterprise SSO (SAML/OIDC) is now metered in Pro ($75/mo per connection beyond the first). If you need 3+ connections, costs add up. Also, social connections are limited to 3 on Free.
 
 ---
 

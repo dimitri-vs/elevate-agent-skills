@@ -10,7 +10,7 @@
 Web Research CLI using OpenAI APIs.
 
 Supports three depth levels:
-- fast: gpt-5-search-api via Chat Completions (10-60 sec) - quick lookups, current facts
+- fast: gpt-5 with web_search + low reasoning (~1-2 min) - quick lookups, current facts
 - normal: o3-deep-research with code interpreter (2-6 min) - thorough analysis
 - deep: o3-deep-research with code interpreter (6-14 min) - comprehensive research
 
@@ -65,7 +65,7 @@ def log_research(depth: str, query: str, metrics: dict, success: bool = True):
 
 
 # Depth configurations
-# - fast: gpt-5-search-api via Chat Completions (always searches web)
+# - fast: gpt-5 via Responses API with web_search tool + reasoning (low effort)
 # - normal/deep: o3-deep-research model (true deep research)
 #   Alternative: o4-mini-deep-research is faster/cheaper but lower quality
 #
@@ -73,15 +73,6 @@ def log_research(depth: str, query: str, metrics: dict, success: bool = True):
 # research (not max_output_tokens).
 #
 # Profiling results (2026-02-02, no limiters):
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ gpt-5-search-api (fast)                                                     │
-# ├────────────┬──────────┬─────────────┬──────────────┬─────────┬─────────────┤
-# │ Complexity │ Duration │ Input Tok   │ Output Tok   │ Content │ Citations   │
-# ├────────────┼──────────┼─────────────┼──────────────┼─────────┼─────────────┤
-# │ Simple     │ 10s      │ 15,680      │ 54           │ 158ch   │ 0           │
-# │ Medium     │ 13s      │ 16,039      │ 1,428        │ 6.8Kch  │ 17          │
-# │ Complex    │ 19s      │ 30,872      │ 2,518        │ 10.7Kch │ 18          │
-# └────────────┴──────────┴─────────────┴──────────────┴─────────┴─────────────┘
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ o3-deep-research (normal/deep)                                              │
 # ├────────────┬──────────┬─────────────┬──────────────┬─────────┬─────────────┤
@@ -91,12 +82,15 @@ def log_research(depth: str, query: str, metrics: dict, success: bool = True):
 # │ Medium     │ 3:14     │ 23,719      │ 14,926       │ 13      │ 27.6Kch     │
 # │ Complex    │ 6:55     │ 41,717      │ 25,362       │ 36      │ 23.2Kch     │
 # └────────────┴──────────┴─────────────┴──────────────┴─────────┴─────────────┘
+# gpt-5 + web_search (fast): ~1-2 min with low reasoning effort. Not yet profiled.
 DEPTH_CONFIGS = {
     "fast": {
-        "model": "gpt-5-search-api",
-        "api": "chat_completions",  # Uses Chat Completions API with web_search_options
-        "max_tokens": 50000,
-        "timeout": 120,  # 2 minutes
+        "model": "gpt-5",
+        "api": "responses",
+        "tools": [{"type": "web_search"}],
+        "reasoning": {"effort": "medium"},
+        "max_output_tokens": 50000,
+        "timeout": 300,  # 5 minutes
     },
     "normal": {
         "model": "o3-deep-research",
@@ -107,7 +101,7 @@ DEPTH_CONFIGS = {
         ],
         "max_output_tokens": 50000,
         "max_tool_calls": 25,
-        "timeout": 420,  # 7 minutes
+        "timeout": 900,  # 15 minutes
         "background": True,
     },
     "deep": {
@@ -119,7 +113,7 @@ DEPTH_CONFIGS = {
         ],
         "max_output_tokens": 100000,
         # No max_tool_calls limit - let it run fully
-        "timeout": 900,  # 15 minutes
+        "timeout": 1800,  # 30 minutes
         "background": True,
     },
 }
@@ -311,46 +305,6 @@ def poll_for_completion(client: OpenAI, response_id: str, timeout: int) -> dict:
         time.sleep(poll_interval)
 
 
-def research_chat_completions(client: OpenAI, query: str, config: dict) -> dict:
-    """Perform web search using Chat Completions API (gpt-5-search-api)."""
-    request_params = {
-        "model": config["model"],
-        "web_search_options": {},  # Enable web search
-        "messages": [{"role": "user", "content": query}],
-    }
-    if "max_tokens" in config:
-        request_params["max_tokens"] = config["max_tokens"]
-
-    response = client.chat.completions.create(**request_params)
-
-    content = response.choices[0].message.content or ""
-    citations = []
-
-    # Extract citations from annotations
-    annotations = getattr(response.choices[0].message, 'annotations', None) or []
-    for ann in annotations:
-        if hasattr(ann, 'url_citation'):
-            cite = ann.url_citation
-            citations.append({
-                "title": getattr(cite, 'title', ''),
-                "url": getattr(cite, 'url', ''),
-            })
-        elif hasattr(ann, 'url'):
-            citations.append({
-                "title": getattr(ann, 'title', ''),
-                "url": ann.url,
-            })
-
-    # Extract metrics
-    metrics = {
-        "input_tokens": getattr(response.usage, 'prompt_tokens', None) if response.usage else None,
-        "output_tokens": getattr(response.usage, 'completion_tokens', None) if response.usage else None,
-        "total_tokens": getattr(response.usage, 'total_tokens', None) if response.usage else None,
-    }
-
-    return {"content": content, "citations": citations, "response": response, "metrics": metrics}
-
-
 def count_tool_calls(response) -> dict:
     """Count tool calls from deep research response."""
     counts = {"web_search": 0, "code_interpreter": 0, "other": 0}
@@ -367,7 +321,7 @@ def count_tool_calls(response) -> dict:
 
 
 def research_responses(client: OpenAI, query: str, config: dict) -> dict:
-    """Perform deep research using Responses API (o3-deep-research)."""
+    """Perform research using Responses API."""
     request_params = {
         "model": config["model"],
         "input": query,
@@ -377,6 +331,8 @@ def research_responses(client: OpenAI, query: str, config: dict) -> dict:
         request_params["max_output_tokens"] = config["max_output_tokens"]
     if "max_tool_calls" in config:
         request_params["max_tool_calls"] = config["max_tool_calls"]
+    if "reasoning" in config:
+        request_params["reasoning"] = config["reasoning"]
 
     if config.get("background"):
         request_params["background"] = True
@@ -434,11 +390,7 @@ def research(
     # Track timing
     start_time = time.time()
 
-    # Route to appropriate API
-    if config.get("api") == "chat_completions":
-        result = research_chat_completions(client, query, config)
-    else:
-        result = research_responses(client, query, config)
+    result = research_responses(client, query, config)
 
     duration = time.time() - start_time
 
@@ -588,8 +540,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Depth levels:
-  fast    gpt-5-search-api via Chat Completions (10-60 sec)
-          Quick lookups, current facts
+  fast    gpt-5 with web_search + reasoning (~1-2 min)
+          Quick lookups, current facts with reasoning-informed synthesis
           Input: A couple sentences with background context
 
   normal  o3-deep-research with code interpreter (2-6 min)

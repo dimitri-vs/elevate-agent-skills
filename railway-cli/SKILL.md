@@ -82,6 +82,14 @@ railway volume add                # Add a volume
 railway volume attach             # Attach volume to service
 railway volume detach             # Detach volume from service
 
+# Storage Buckets (S3-compatible object storage)
+# Create via Dashboard > Add > Storage Bucket
+# Credentials appear as env vars: BUCKET_ENDPOINT, BUCKET_ACCESS_KEY_ID, etc.
+# Python usage:
+#   s3 = boto3.client('s3', endpoint_url=BUCKET_ENDPOINT,
+#         aws_access_key_id=..., aws_secret_access_key=...)
+#   s3.upload_file('file.png', BUCKET_NAME, 'path/file.png')
+
 # Domains
 railway domain                    # Generate Railway domain
 railway domain example.com -p 8080  # Add custom domain with port
@@ -238,6 +246,16 @@ When a Root Directory is set, these settings follow it:
 These do **NOT** follow Root Directory (always use absolute paths from repo root):
 - **Watch Paths**: Use `/app/**/*.js` not `**/*.js` for root dir `/app`
 - **Railway Config File**: Use `/backend/railway.toml` not `railway.toml`
+
+### Storage Buckets
+Railway provides S3-compatible object storage ("Buckets") as a first-party service.
+
+- **Pricing**: $0.015/GB-month storage. Egress and API calls are **free** (unlimited).
+- **Access**: Private-only (no public URLs). Use presigned URLs or serve through your app.
+- **S3 compatibility**: Full — works with boto3, AWS SDK, any S3 client. Set `endpoint_url` to the bucket endpoint.
+- **Setup**: Dashboard > Add > Storage Bucket. Credentials (endpoint, access key, secret, bucket name) are injected as env vars into linked services.
+- **Limits**: No documented caps on object count or request rate. Billed per storage used.
+- **Compared to alternatives**: Same storage price as Cloudflare R2, cheaper than AWS S3 ($0.023/GB). Unlike R2, no per-operation charges. Unlike S3, no egress fees.
 
 ### Danger Zone
 - **Delete Service**: Permanently removes service and all deployments from the environment
