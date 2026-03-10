@@ -12,16 +12,18 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 
 | Skill | Description |
 |-------|-------------|
-| **clockify-api** | Clockify REST API integration patterns and key endpoints |
 | **clerk** | Clerk authentication — setup, sign-in/sign-up flows, agency workflow for client handover |
+| **clockify-api** | Clockify REST API integration patterns and key endpoints |
+| **codex-review** | Independent code review via OpenAI Codex CLI (WSL) — second-opinion sanity checks |
 | **interface-design** | Interface design guidance for utilitarian apps — dashboards, tools, admin panels, data-heavy UIs |
+| **playwright** | Browser automation via Playwright CLI and MCP — navigation, interaction, auth persistence, parallel sessions |
 | **pydantic-ai** | Pydantic AI agent framework — agents, tools, streaming, multi-agent delegation, FastAPI integration |
 | **railway-cli** | Railway cloud platform — deploy, logs, environments, CLI commands |
 | **skeleton** | Skeleton UI framework reference for Svelte components |
 | **skill-creator** | Meta-skill for creating new skills with proper structure and best practices |
-| **slack-canvas** | Read and edit Slack canvases — to-do lists, notes, checklists |
+| **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |
 | **tailwindcss-skill** | Tailwind CSS v4 fundamentals — installation, CSS-first config, design systems |
-| **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5-search) and deep research (o3-deep-research) |
+| **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5 + web_search) and deep research (o3-deep-research) |
 
 ## Getting Started
 
