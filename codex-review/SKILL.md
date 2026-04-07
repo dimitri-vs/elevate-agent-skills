@@ -75,7 +75,7 @@ This is the most common use case — after implementing a plan, check completene
 >
 > Please review what was actually implemented, how complete it is, if there are any bugs/issues, and include any other recommendations (in an Other Recommendations section) you may have. As you are exploring, if you happen to come across problems/bugs outside the scope of the plan, feel free to surface those too. Consider this a fairly open-ended task, and you are an independent third party reviewer.
 
-**Note:** Convert any Windows paths in the prompt to WSL paths (e.g., `C:\Users\Dimitri\.claude\plans\foo.md` becomes `/mnt/c/Users/Dimitri/.claude/plans/foo.md`). The `--workdir` flag is converted automatically, but paths *inside the prompt text* are not.
+**Note:** Convert any Windows paths in the prompt to WSL paths (e.g., `C:\Users\<username>\.claude\plans\foo.md` becomes `/mnt/c/Users/<username>/.claude/plans/foo.md`). The `--workdir` flag is converted automatically, but paths *inside the prompt text* are not.
 
 ### Code review (recent changes)
 

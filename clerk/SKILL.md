@@ -23,16 +23,16 @@ Set up the application within this workspace:
 - Configure auth methods (email/password, social providers, etc.)
 - Test the full auth flow in development mode
 
-### 3. Invite Client as Admin
+### 3. Invite Client as Owner (aka Admin)
 
 When ready for handover:
 1. Go to workspace settings
-2. Invite the client's email address with **Admin** role
+2. Invite the client's email address with **Owner** role (Hobby plan only has Owner/Viewer — there is no separate Admin role)
 
 ### 4. Handover Message
 
 Send to client:
-> "I've set up a dedicated secure workspace for your user account system. Please accept the invite I just sent from Clerk.com to join as an Admin—this gives you full control to add your billing info and manage the account directly."
+> "I've set up a dedicated secure workspace for your user account system. Please accept the invite I just sent from Clerk.com to join as an Owner—this gives you full control to add your billing info and manage the account directly."
 
 Once accepted, the client:
 - Becomes co-owner

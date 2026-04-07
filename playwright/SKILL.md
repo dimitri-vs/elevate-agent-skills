@@ -26,6 +26,8 @@ MCP also handles asset/temp file storage automatically, whereas CLI requires the
 
 **Always use `--headed`** unless explicitly told otherwise. The user should be able to see what the browser is doing.
 
+**Prefer `eval` over snapshot→ref for interactions** when you already know the target (button text, input name, selector). It's significantly faster — no snapshot, no grep, no ref lookup. Use the snapshot→ref loop for **discovery** (unknown pages), then switch to `eval` for acting. Snapshots/screenshots remain the right tool for **verification**.
+
 The fundamental loop: **snapshot → find ref → interact → verify**.
 
 ```bash
@@ -181,10 +183,16 @@ Unlike MCP (which manages temp files automatically), CLI requires explicit artif
 ### Artifact directory strategy
 Always direct artifacts to `.pw-tmp/` in the project root (add to `.gitignore`).
 
-```bash
-# At session start, ensure the directory exists
-mkdir -p .pw-tmp
+**IMPORTANT — Before every Playwright session**, run this one-liner to clean up any stale artifacts from previous sessions, then create a fresh directory:
 
+```bash
+# Clean stale .pw-tmp (if older than 1 day) and create fresh
+find .pw-tmp -maxdepth 0 -mtime +1 -exec rm -rf {} + 2>/dev/null; mkdir -p .pw-tmp
+```
+
+This MUST be the first command you run before opening a browser. It prevents orphan buildup from interrupted sessions while preserving artifacts from a session that just ran (< 1 day old).
+
+```bash
 # All snapshots and screenshots go here
 npx @playwright/cli snapshot --filename .pw-tmp/page.yaml
 npx @playwright/cli screenshot --filename .pw-tmp/home.png
@@ -199,6 +207,8 @@ npx @playwright/cli screenshot --filename .pw-tmp/home.png
 # End of session: clean up all artifacts
 rm -rf .pw-tmp/
 ```
+
+End-of-session cleanup is still best practice, but the start-of-session self-clean above is the safety net for when it doesn't happen.
 
 ### .gitignore additions
 ```
@@ -324,6 +334,55 @@ Place at `.playwright/cli.config.json` in your project root. The CLI auto-discov
 Key fields: `browserName` (`chromium`/`firefox`/`webkit`), `launchOptions.channel` (`chrome`/`msedge` for installed browsers), `launchOptions.headless`, `launchOptions.args`, `userDataDir`, `contextOptions.viewport`, `contextOptions.locale`, `cdpEndpoint` (WebSocket URL for attaching to existing browser).
 
 Override per-invocation: `npx @playwright/cli --config=path/to/config.json open "url"`.
+
+---
+
+## `run-code` — Advanced Scripting
+
+The argument **must be a function expression** receiving `page` — bare statements cause `SyntaxError`.
+
+```bash
+# Correct                                          # WRONG
+run-code 'async (page) => { return page.title(); }'  # run-code 'const t = await page.title();'
+```
+
+**Shell quoting:** Use single quotes outer, double quotes inside. Arrow functions in double quotes get mangled by shell expansion.
+
+**Multi-line code from files** — write a `.js` file and collapse newlines:
+
+```bash
+CODE=$(tr '\n' ' ' < .pw-tmp/script.js) && npx @playwright/cli run-code "$CODE"
+```
+
+**Node APIs:** No `require()` in the VM context, but dynamic `import()` works:
+
+```bash
+npx @playwright/cli run-code 'async (page) => {
+  const fs = await import("node:fs/promises");
+  await fs.writeFile(".pw-tmp/page.html", await page.content());
+}'
+```
+
+### Network response interception
+
+`page.on("response")` inside `run-code` captures API responses — far more reliable than DOM scraping for SPAs. Set up the listener **before** navigation.
+
+```js
+// .pw-tmp/intercept.js — then run with: CODE=$(tr '\n' ' ' < .pw-tmp/intercept.js) && npx @playwright/cli run-code "$CODE"
+async (page) => {
+  const captured = [];
+  page.on("response", async (r) => {
+    if (r.url().includes("/api/graphql")) {
+      try { captured.push({ url: r.url(), data: await r.json() }); } catch(e) {}
+    }
+  });
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  return captured;  // or use await import("node:fs/promises") to write to disk
+}
+```
+
+The built-in `network` command lists URLs/statuses but **not response bodies** — use `run-code` for actual data.
 
 ---
 

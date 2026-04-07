@@ -34,10 +34,12 @@ Uses gpt-5 via the Responses API with `web_search` tool and low reasoning effort
 - Simple lookups where you know the answer exists
 - Low-stakes decisions
 
+**Query detail matters even in fast mode.** Don't write terse Google-style keyword queries — write 1-3 sentences that give the model enough context to search effectively and synthesize a useful answer. Include what you're trying to accomplish, relevant specifics (model numbers, sizes, versions), and what kind of answer you're looking for.
+
 **Examples:**
-- "What is the current price of Bitcoin?"
-- "What version of Python does Django 5.0 require?"
-- "When is the next Apple event?"
+- "What version of Python does Django 5.0 require? I'm setting up a new project and want to confirm minimum and recommended versions."
+- "I'm trying to price a used 6-foot Green Giant Arborvitae for a local sale. What do established arborvitae this size typically sell for secondhand vs. retail nursery pricing? Looking for Craigslist, eBay, and garden forum comps."
+- "When is the next Apple event scheduled for 2026? I'm deciding whether to wait for a new MacBook announcement or buy now."
 
 ### Normal (2-6 min) — Moderate Research
 
@@ -100,8 +102,8 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 > - **Normal / Deep:** Use `run_in_background: true`
 
 ```bash
-# Fast lookup (default) — a sentence or two
-cd "<skill-directory>" && uv run research.py "What is the current price of Bitcoin?"
+# Fast lookup (default) — 1-3 sentences with context
+cd "<skill-directory>" && uv run research.py "I'm trying to price a used 6-foot Green Giant Arborvitae for a local sale. What do established arborvitae this size typically sell for secondhand vs. retail nursery pricing? Looking for Craigslist, eBay, and garden forum comps."
 
 # Normal research — roughly a paragraph of context
 # ⚠️ Use timeout: 600000 or run_in_background: true
