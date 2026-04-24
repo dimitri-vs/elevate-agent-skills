@@ -19,7 +19,7 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 > - **Short inputs (<500 words):** default timeout is fine.
 > - **Long inputs (1000+ words):** set `timeout: 600000` (10 min) OR use `run_in_background: true`.
 > - **For speed over quality**, pass `-m claude-sonnet-4-6` — roughly 2-3x faster than Opus 4.7 with a small structural-humanization quality gap.
-> - **If Claude Code's Bash display truncates the output** (appears empty after a long run), re-run with `> /tmp/humanize/out.txt` and `cat` the file. The process completed; the display just hid the long stdout.
+> - **If Claude Code's Bash display truncates the output** (appears empty after a long run), re-run redirecting to `/tmp/humanize/out.md` and `cat` the file (see [Temp-file pattern](#temp-file-pattern) below). The process completed; the display just hid the long stdout.
 
 **Prefer a heredoc over creating a scratch file.** Anything generated in the current conversation should pipe directly via heredoc, not via a temp file you cat back. Single-quoted delimiters (`<<'EOF'`) prevent shell expansion, so apostrophes, `"quotes"`, URLs, and `$` all pass through verbatim.
 
@@ -43,8 +43,11 @@ EOF
 # Content already on disk
 cat draft.md | humanize
 
-# Heuristic texture pass (rushed-typing signals: misspellings, dropped apostrophes)
+# Force heavy heuristic texture (misspellings, dropped apostrophes, etc.), overriding the LLM's auto recommendation
 cat proposal.txt | humanize --heuristic-texture
+
+# Force the heuristic pass off, overriding the LLM's auto recommendation
+cat polished_draft.md | humanize --no-heuristic
 
 # Long input, faster model
 cat long_reddit_post.md | humanize -m claude-sonnet-4-6 > long_reddit_post.humanized.md
@@ -58,7 +61,7 @@ EOF
 cat draft.md | humanize > draft.humanized.md
 ```
 
-Warnings (e.g. `model 'claude-opus-4-7' rejected temperature=0.8; retrying without it`) go to stderr and do not pollute piped output.
+Any warnings go to stderr and do not pollute piped output.
 
 ## When to use
 
@@ -72,23 +75,59 @@ Warnings (e.g. `model 'claude-opus-4-7' rejected temperature=0.8; retrying witho
 - Text that is already conversational and plainly-written. The humanizer does real work only when tells are present.
 - Text under ~100 characters — the default `--min-length-ratio 0.4` safety fallback will often trigger and return the original unchanged. Pass `--min-length-ratio 0.1` for short inputs if you really want a rewrite attempt.
 
-## Heuristic texture flag
+## Heuristic texture (auto by default)
 
-`--heuristic-texture` (off by default) adds a second pass of surface-level "rushed typing" signals: occasional single-instance misspellings, dropped apostrophes in safe contractions (don't → dont), hyphen removal in compound words (real-time → real time).
+The heuristic pass adds surface-level "rushed typing" signals: occasional misspellings, dropped apostrophes in safe contractions (don't → dont), hyphen removal in compound words (real-time → real time), exclamation marks demoted to periods.
 
-- **Use** for: Upwork proposals, casual chat replies, Slack messages, SMS-style content.
-- **Skip** for: LinkedIn posts, essays, long-form articles, client-facing emails, anything meant to look polished.
+**Default behavior is `auto`:** the LLM classifies the content register while rewriting and emits a hidden control sentinel (`<!-- heuristic: none|light|heavy -->`) that selects the pass intensity. The sentinel is stripped before output.
+
+- `none` (polished — LinkedIn posts, essays, client-facing emails, proposals): no texture pass.
+- `light` (semi-casual — Upwork proposals, informal emails, thought-out Slack posts): conservative probabilities, at most one transform per category.
+- `heavy` (casual chat — Slack DMs, SMS, quick replies): current default-aggressive probabilities.
+
+Override only when auto gets it wrong:
+- `-t, --heuristic-texture`: force heavy regardless of the LLM's recommendation.
+- `--no-heuristic`: force off regardless of the LLM's recommendation.
+
+The two override flags are mutually exclusive.
 
 ## Flags summary
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `-s, --steering TEXT` | none | Extra steering rules appended to the prompt |
-| `-t, --heuristic-texture` | off | Run the heuristic surface-texture pass after the LLM rewrite |
+| `-t, --heuristic-texture` | — | Force the heuristic pass at heavy intensity, overriding auto |
+| `--no-heuristic` | — | Disable the heuristic pass entirely, overriding auto |
 | `-m, --model ID` | `claude-opus-4-7` | Anthropic model ID (prompt is Opus-tuned, so quality may drop on other models) |
-| `--temperature FLOAT` | 0.8 | LLM sampling temperature (silently ignored by models that have deprecated it) |
+| `--temperature FLOAT` | 0.8 | LLM sampling temperature (silently skipped for models that have deprecated it, e.g. Opus 4.7) |
 | `--min-length-ratio FLOAT` | 0.4 | Safety fallback — if output is shorter than this ratio of input, return the original |
 | `--max-tokens INT` | 8192 | Output-length ceiling in tokens. Raise for long-form inputs (essays, multi-paragraph posts) that hit truncation |
+
+## Temp-file pattern
+
+When a heredoc won't do — long-form input, text containing a literal line `EOF`, truncated Bash-tool output, or a run where you want the raw input preserved for diffing — stage the input and output under `/tmp/humanize/`. Bash resolves `/tmp/` portably: real `/tmp` on Linux/macOS, and a mapped path under `AppData\Local\Temp\` on Git Bash / MSYS (Windows). Mirrors the pattern used by the `codex-review` skill.
+
+```bash
+mkdir -p /tmp/humanize
+
+# Stage the input via heredoc (same 'EOF' quoting rules apply)
+cat > /tmp/humanize/in.md <<'EOF'
+...draft body, multi-paragraph, quotes, URLs, $dollars all safe...
+EOF
+
+# Run and save the humanized output
+humanize < /tmp/humanize/in.md > /tmp/humanize/out.md
+
+# Read it back to show the user
+cat /tmp/humanize/out.md
+
+# Optional: diff before/after
+diff /tmp/humanize/in.md /tmp/humanize/out.md
+```
+
+> **Do not use the `Write` tool to create files in `/tmp/humanize/`.** On Windows/Git-Bash, the `Write` tool's `/tmp/` path does NOT resolve to the same filesystem location as bash's `/tmp/`, so `cat` will silently fail to find the file. Always stage input with a bash heredoc as above. (Same caveat as `codex-review`.)
+
+When running several humanize passes in one session (e.g. comparing models, or iterating with different `-s` steering), use descriptive filenames: `/tmp/humanize/proposal-opus.md`, `/tmp/humanize/proposal-sonnet.md`.
 
 ## Typical workflow from within a Claude Code session
 
@@ -96,10 +135,10 @@ When you have text in the current conversation that should be humanized:
 
 1. **Default: pipe directly via heredoc.** A single-quoted heredoc (`humanize <<'EOF' ... EOF`) handles multi-paragraph prose, apostrophes, quotes, URLs, and `$` signs without scratch files or escaping gymnastics.
 2. **If the content is already on disk**, `cat path.md | humanize`.
-3. **Only write to a temp file when** (a) the content is genuinely long-form (roughly >5KB / essay-length), (b) you need to keep the input around for diffing/comparison, or (c) the text contains a literal line `EOF` that would terminate the heredoc early.
+3. **Use the [temp-file pattern](#temp-file-pattern)** when (a) the content is genuinely long-form (roughly >5KB / essay-length), (b) you need to keep the input around for diffing/comparison, (c) the text contains a literal line `EOF` that would terminate the heredoc early, or (d) the Bash-tool display truncated a previous run.
 4. Show the humanized result to the user. Offer to apply it back to the original destination (chat window, file, PR description).
 
-Avoid creating scratch files just to `cat` them through the pipe. If the text only exists in conversation context, a heredoc is the right default.
+Avoid creating scratch files in the project working directory just to `cat` them through the pipe — either use a heredoc (default) or `/tmp/humanize/` (when heredoc won't do).
 
 ## Example
 
