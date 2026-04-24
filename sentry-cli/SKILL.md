@@ -24,6 +24,8 @@ sentry-cli issues mute -o elevate-code -p <project-slug> -i <issue-id>
 sentry-cli issues unresolve -o elevate-code -p <project-slug> -i <issue-id>
 ```
 
+**Cross-org gotcha**: a personal user token (`sntryu_...`) only reaches orgs where that user is an active member. If an org is over its seat limit the user's membership gets silently disabled and every query 401s with `"code": "member-disabled-over-limit"`. Workaround: have an org owner create an **Internal Integration** (Sentry → Developer Settings) with the needed read scopes — those tokens (`sntrys_...`) don't consume a seat — and drop it in a project-local `.sentryclirc` (sentry-cli reads `./.sentryclirc` before `~/.sentryclirc`).
+
 ## API Fallback (last resort)
 
 Only if `sentry-cli` lacks the subcommand (e.g. fetching full event payloads/stack traces):

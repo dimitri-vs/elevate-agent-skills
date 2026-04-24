@@ -254,6 +254,45 @@ npx @playwright/cli eval "(el) => el.textContent" e31
 ```
 Reserve screenshots for visual-only checks (graphs, canvas, layout verification).
 
+### Heavy pages (e-commerce, SPAs)
+Amazon, Home Depot, Walmart, and most modern e-commerce or SPA-heavy pages have DOMs that can defeat `find`, `get_page_text`, and `snapshot` — they can run 200k+ tokens with inline scripts and lazy-loaded tiles. One attempt to confirm is fine, but if you get "too large" errors or empty regions, **don't retry the same tools** — pivot to `run-code` with `page.evaluate` and targeted CSS selectors.
+
+For unfamiliar sites where you don't know the selectors, spawn a quick Explore subagent against the live page to identify the stable selectors (result card container, title, price, link attributes) before writing the extraction script. For well-known targets, write the extraction directly.
+
+**Multi-item pattern:** Open the browser once, then use `goto` for each query and re-run the same extraction script — don't `open` repeatedly.
+
+**JS-in-bash comment gotcha:** `CODE=$(tr '\n' ' ' < script.js)` silently breaks if the JS contains `//` single-line comments — after newlines collapse, everything after `//` is commented out to the end of the script. Use `/* */` block comments, or keep the JS as a single line in a file and `cat` it directly (no `tr` collapse).
+
+**Inner scroll container gotcha (LinkedIn, Gmail, Notion, many SPAs):** `window.scrollTo()`, `window.scrollY`, `page.mouse.wheel`, and `Keyboard: End/PageDown` all silently no-op when `<body>` has `overflow: hidden` and the real scroll happens inside a nested element. Symptom: `scrollY` stays 0 and `document.documentElement.scrollHeight === clientHeight` even on a long page. Fix: find the actual scroller and set its `scrollTop` directly.
+
+```js
+// Diagnostic — find the real scroll container
+const [scroller] = [...document.querySelectorAll('*')].filter(el => {
+  const s = getComputedStyle(el);
+  return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10;
+});
+// Scroll it (e.g., LinkedIn's is `main#workspace`)
+scroller.scrollTop = 0;                    // to top
+scroller.scrollTop = scroller.scrollHeight; // to bottom
+```
+
+Run a progressive scroll loop (`scrollTop += 600` with `waitForTimeout(400)` between steps) to trigger lazy loading before extracting text or screenshots. Full-page screenshots often DO work on these pages (Playwright walks the scroll container), but element-ref snapshots capture only what's currently rendered.
+
+**Long-page visual review (landing pages, profiles, long articles):** Don't use `--full-page` — the resulting PNG is long and narrow, and when read back by the agent it gets compressed into an unreadable thumbnail. Instead, scroll in viewport-sized chunks and screenshot each chunk, so every image renders at a readable scale.
+
+```js
+// Pattern — chunked viewport screenshots
+const scroller = document.querySelector('main#workspace') || document.scrollingElement;
+const vh = scroller.clientHeight;
+for (let i = 0, y = 0; y < scroller.scrollHeight; i++, y += vh * 0.9) {
+  scroller.scrollTop = y;
+  await new Promise(r => setTimeout(r, 500));
+  // then from bash: npx @playwright/cli screenshot --filename .pw-tmp/section-${i}.png
+}
+```
+
+Overlap each chunk ~10% so nothing lands on a page boundary. For text-only audits (copy review, profile audit), skip screenshots entirely and return `innerText` from the scroll container — zero image tokens, perfect fidelity.
+
 ---
 
 ## Parallel Browsing with Subagents

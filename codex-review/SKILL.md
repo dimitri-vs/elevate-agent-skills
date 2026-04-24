@@ -39,6 +39,17 @@ Use the **Bash** tool with these parameters:
 
 When the background task completes, read results with **TaskOutput**. The review text is on stdout; status/progress messages are on stderr.
 
+> **Never pipe the command through `head`, `tail`, `| wc`, etc.** `head -N` closes its stdin after N lines and SIGPIPEs the upstream `uv run` process, silently killing Codex before the review runs — you'll see a ~70-byte output with only "Starting Codex review..." and nothing saved to `~/reviews/`. If you want to preview the result without dumping it into context, read the saved file from `~/reviews/` after completion instead.
+
+**Long/multiline prompts:** when the prompt has shell-significant characters (quotes, code blocks, em dashes, etc.) or runs more than ~30 lines, write it to a temp file first and pass via `"$(cat /tmp/myprompt.txt)"`. Use a **bash heredoc** to create the file, not the `Write` tool — `Write`'s `/tmp/` path does NOT resolve to the same filesystem location as bash's `/tmp/` on Windows/Git-Bash, so `cat` will silently fail. Pattern:
+
+```bash
+cat > /tmp/codex_prompt.txt << 'PROMPT_EOF'
+... your full prompt here ...
+PROMPT_EOF
+cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp/codex_prompt.txt)"
+```
+
 ### Arguments
 
 | Arg | Description |
