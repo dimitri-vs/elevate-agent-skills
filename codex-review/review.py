@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import shlex
 import subprocess
@@ -25,11 +26,29 @@ from pathlib import Path, PureWindowsPath
 
 REVIEWS_DIR = Path.home() / "reviews"
 
+# Codex CLI model selection notes (as of 2026-05-20):
+# - Under ChatGPT-account auth, Codex does NOT support the floating gpt-5-codex
+#   alias (API-key auth only). ChatGPT users must pass a versioned snapshot.
+# - Allowed strings per developers.openai.com/codex/models: gpt-5.5, gpt-5.4,
+#   gpt-5.4-mini, gpt-5.3-codex, gpt-5.2 (and Pro-only gpt-5.3-codex-spark).
+# - Newer models also require a recent CLI: gpt-5.5 needs CLI ≳ 0.115; older
+#   CLIs reject it with "requires a newer version of Codex". The wrapper
+#   surfaces a non-blocking upgrade warning before the request hits Codex.
+# - Tiered model strategy (2026-05-20): gpt-5.3-codex for routine work (high),
+#   gpt-5.5 for hard/ambiguous tasks (xhigh). 5.3-codex is ~3x cheaper on Plus
+#   credits, more predictable, and sufficient for most code review. 5.5 is the
+#   stronger peak model but burns quota faster and has had intermittent regressions.
+# - Override at runtime via CODEX_REVIEW_MODEL (applies to all effort levels).
+# - "standard" (medium reasoning) was dropped — in practice we always use high/xhigh.
 EFFORT_PRESETS = {
-    "standard": {"model": "gpt-5.3-codex", "reasoning": "medium"},
-    "high":     {"model": "gpt-5.3-codex", "reasoning": "high"},
-    "xhigh":    {"model": "gpt-5.3-codex", "reasoning": "xhigh"},
+    "high":  {"model": "gpt-5.3-codex", "reasoning": "high"},
+    "xhigh": {"model": "gpt-5.5", "reasoning": "xhigh"},
 }
+
+# Last-known-latest Codex CLI version. Used to surface a non-blocking warning
+# when the user's local CLI is significantly behind. Bump this periodically.
+LAST_KNOWN_CODEX_CLI = (0, 132, 0)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-05-20"
 
 
 def win_to_wsl(path: str) -> str:
@@ -47,16 +66,55 @@ def slugify(text: str, max_len: int = 50) -> str:
     return slug[:max_len].rstrip("-") or "review"
 
 
+def check_codex_version() -> None:
+    """Print Codex CLI version. Warn (non-blocking) if significantly behind.
+
+    Newer models (e.g. gpt-5.5) require recent CLI versions; surfacing a stale
+    install proactively saves a confusing "requires a newer version of Codex"
+    error round-trip.
+    """
+    try:
+        r = subprocess.run(
+            ["wsl", "bash", "-lic", "codex --version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        version_str = (r.stdout or "").strip()
+        # Anchor on the codex-cli prefix so we don't misparse if future output
+        # includes other semver-shaped strings (e.g. update notices).
+        m = re.search(r"codex-cli\s+v?(\d+)\.(\d+)\.(\d+)", version_str, re.IGNORECASE)
+        if not m:
+            return
+        current = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if current < LAST_KNOWN_CODEX_CLI:
+            latest = ".".join(str(n) for n in LAST_KNOWN_CODEX_CLI)
+            local = version_str.removeprefix("codex-cli ").strip()
+            print(
+                f"  ⚠️  Your Codex CLI ({local}) is out of date — last known "
+                f"latest is {latest} (checked {LAST_KNOWN_CODEX_CLI_DATE}). "
+                f"Newer models (e.g. gpt-5.5) may be rejected.\n"
+                f"     We recommend upgrading: "
+                f"wsl npm install -g @openai/codex@latest",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass  # Version check is best-effort; never block a review
+
+
+def resolve_model(effort: str) -> str:
+    """Resolve model name: CODEX_REVIEW_MODEL env var overrides preset default."""
+    return os.getenv("CODEX_REVIEW_MODEL", EFFORT_PRESETS[effort]["model"])
+
+
 def run_codex(prompt: str, workdir: str | None = None,
               sandbox: str | None = None, timeout: int = 1800,
-              effort: str = "standard") -> tuple[str, int, float, str]:
+              effort: str = "high") -> tuple[str, int, float, str]:
     """Run codex exec via WSL and return (output, exit_code, elapsed_secs, stderr).
 
     Default is --yolo mode (no approvals, no sandbox) since nobody is present
     to approve prompts in non-interactive mode. Pass --sandbox to restrict.
     """
     preset = EFFORT_PRESETS[effort]
-    model = preset["model"]
+    model = resolve_model(effort)
     reasoning = preset["reasoning"]
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"/tmp/codex_review_{ts}.md"
@@ -77,7 +135,7 @@ def run_codex(prompt: str, workdir: str | None = None,
     parts = ["codex", "exec"]
     parts.extend(["-m", model])
     parts.extend(["-c", f"model_reasoning_effort={shlex.quote(reasoning)}"])
-    parts.extend(["-c", "reasoning_summary=none"])
+    parts.extend(["-c", "model_reasoning_summary=none"])
     if use_file:
         parts.append("-")  # read prompt from stdin (redirected from file)
     if sandbox:
@@ -102,6 +160,7 @@ def run_codex(prompt: str, workdir: str | None = None,
     print(f"  Mode:      {mode}", file=sys.stderr)
     print(f"  Effort:    {effort} (model={model}, reasoning={reasoning})", file=sys.stderr)
     print(f"  Timeout:   {timeout // 60}m", file=sys.stderr)
+    check_codex_version()
 
     start = time.time()
     try:
@@ -173,7 +232,7 @@ def run_codex(prompt: str, workdir: str | None = None,
 def save_review(response: str, workdir: str | None, prompt: str,
                 *, status: str = "success", exit_code: int = 0,
                 elapsed: float = 0, stderr: str = "",
-                effort: str = "standard") -> Path:
+                effort: str = "high") -> Path:
     """Save review to ~/reviews/ with YAML frontmatter."""
     REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -193,7 +252,7 @@ def save_review(response: str, workdir: str | None, prompt: str,
         f"directory: {workdir or 'N/A'}\n"
         f"reviewer: codex\n"
         f"effort: {effort}\n"
-        f"model: {EFFORT_PRESETS[effort]['model']}\n"
+        f"model: {resolve_model(effort)}\n"
         f"status: {status}\n"
         f"exit_code: {exit_code}\n"
         f"elapsed: {mins}m {secs}s\n"
@@ -225,11 +284,10 @@ def main():
                         help="Use sandbox instead of default --yolo mode")
     parser.add_argument("--timeout", type=int, default=1800,
                         help="Timeout in seconds (default: 1800)")
-    parser.add_argument("-e", "--effort", default="standard",
-                        choices=["standard", "high", "xhigh"],
-                        help="Review effort level (default: standard). "
-                             "standard=gpt-5.3+medium, high=gpt-5.3+high, "
-                             "xhigh=gpt-5.3+xhigh")
+    parser.add_argument("-e", "--effort", default="high",
+                        choices=["high", "xhigh"],
+                        help="Review effort level (default: high). "
+                             "Override model via CODEX_REVIEW_MODEL env var.")
     parser.add_argument("--no-save", action="store_true",
                         help="Don't save results to ~/reviews/")
     args = parser.parse_args()

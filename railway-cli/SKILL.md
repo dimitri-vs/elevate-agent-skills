@@ -129,6 +129,8 @@ timeout 5 railway logs -s <service> || true
 
 ## Configuration Files
 
+> **⚠️ Builder determines which config files matter.** `nixpacks.toml` is read **only** when Builder is Nixpacks; under the default Railpack builder it is silently ignored. If a service was created before the Railpack default flip and you're editing `nixpacks.toml` to fix builds, you may be editing dead weight — check the active Builder in Service Settings, and use `railpack.json` or `RAILPACK_*` env vars to influence Railpack instead.
+
 ### railway.json
 **Important**: The config file path does NOT follow Root Directory. In dashboard settings, use absolute path like `/backend/railway.json`.
 
@@ -158,6 +160,11 @@ Railpack is the new default builder (Nixpacks is legacy). Configure with env var
 | `RAILPACK_INSTALL_COMMAND` | Override install command |
 
 See [Railpack docs](https://railpack.com/config/environment-variables) for full options.
+
+### Node / pnpm under Railpack
+- **Auto-detection**: Railpack reads the `packageManager` field in `package.json` first, then falls back to the lockfile (`pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`). Pin the package manager via `"packageManager": "pnpm@10.x.y"` so Corepack installs the exact version — cleaner than `npm install -g pnpm`.
+- **Frozen lockfile by default**: Railpack runs `pnpm install --frozen-lockfile`. If `pnpm-lock.yaml` drifts from `package.json`, builds fail with `ERR_PNPM_OUTDATED_LOCKFILE`. Run `pnpm install` locally and commit the lockfile, or override via `RAILPACK_INSTALL_COMMAND`.
+- **Mixed-lockfile pitfall**: If both `package-lock.json` and `pnpm-lock.yaml` exist and the install step runs `npm ci` (legacy Nixpacks setups), drift in `package-lock.json` silently breaks every deploy. Track only the lockfile that matches your actual package manager and gitignore the other.
 
 ### Monorepo Setup
 1. Go to Railway Dashboard > Service > Settings

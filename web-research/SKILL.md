@@ -1,6 +1,6 @@
 ---
 name: web-research
-description: Perform web research using OpenAI APIs. Fast mode uses gpt-5 with web_search and low reasoning for quick lookups (~1-2 min). Normal/deep modes use o3-deep-research model for comprehensive multi-step research with code interpreter. Invoke when user needs current web information or thorough research on a topic.
+description: Perform web research using OpenAI APIs. Fast mode uses gpt-5.5 with web_search and medium reasoning for quick lookups (~1-2 min). Normal/deep modes use o3-deep-research model for comprehensive multi-step research with code interpreter. Invoke when user needs current web information or thorough research on a topic.
 ---
 
 # Web Research Skill
@@ -26,7 +26,7 @@ The key question: **Are you retrieving information or exploring a topic?**
 
 ### Fast (~1-2 min) — Retrieval
 
-Uses gpt-5 via the Responses API with `web_search` tool and low reasoning effort. Searches the web then synthesizes results with lightweight reasoning — substantially better than a raw search snippet. Use when you'd normally Google something, open a few links, and get your answer.
+Uses gpt-5.5 via the Responses API with `web_search` tool and medium reasoning effort. Searches the web then synthesizes results with lightweight reasoning — substantially better than a raw search snippet. Use when you'd normally Google something, open a few links, and get your answer.
 
 **Good for:**
 - Current facts (prices, dates, events)
@@ -87,11 +87,21 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 | Depth | Model | Time | Max Tool Calls |
 |-------|-------|------|----------------|
-| **fast** | gpt-5 + web_search | ~1-2 min | — |
+| **fast** | gpt-5.5 + web_search | ~1-2 min | — |
 | **normal** | o3-deep-research | 2-6 min | 25 |
 | **deep** | o3-deep-research | 6-14 min | unlimited |
 
 **Note:** `o4-mini-deep-research` is available as a faster/cheaper alternative to o3, but produces lower quality output.
+
+**Override defaults via env vars** (frontier moves; bumping a model means changing one line in your shell, not editing code):
+
+| Env var | Default | Applies to |
+|---------|---------|------------|
+| `WEB_RESEARCH_FAST_MODEL` | `gpt-5.5` | fast tier |
+| `WEB_RESEARCH_DEEP_MODEL` | `o3-deep-research` | normal + deep tiers |
+| `WEB_RESEARCH_TITLE_MODEL` | `gpt-5.4-nano` | title-generator helper |
+
+Note: the unversioned `gpt-5` slug is **pinned** to its Aug 2025 snapshot — it does not auto-float to newer minors. Update the default (or set the env var) when a new frontier ships.
 
 ## Usage
 
@@ -100,6 +110,8 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 > **CRITICAL — Bash timeout:** The default Bash timeout (2 min) is too short for research calls. You MUST:
 > - **Fast:** Set `timeout: 300000` (5 min) or use `run_in_background: true`
 > - **Normal / Deep:** Use `run_in_background: true`
+>
+> **CRITICAL — Don't invoke from a fork/sub-agent.** Forks reap their child processes on exit, so a `run_in_background: true` bash task launched from inside a fork gets killed when the fork terminates — even if the fork's summary message claims the research is "running in background." Always invoke this skill directly from the main conversation thread; `run_in_background: true` from there already provides out-of-band completion via task notification, with no benefit to wrapping the skill in a fork.
 
 ```bash
 # Fast lookup (default) — 1-3 sentences with context
@@ -147,6 +159,41 @@ cat ~/research/2026-02-04_some-query.md
 ```
 
 If a relevant past result exists, read it and present it to the user instead of re-running the research.
+
+## External Mode (`via chatgpt`)
+
+When invoked as `/web-research [depth] via chatgpt [topic]`, the skill switches to prompt-generation mode instead of calling the API. This externalizes the research to ChatGPT's Deep Research feature (included in ChatGPT Pro/Plus subscriptions), saving ~$1/query while producing equivalent results.
+
+### Workflow
+
+1. **Context gathering** happens identically to a normal invocation - search Outline, read vault docs, check existing research in `~/research/`, pull in whatever context makes the prompt better.
+2. **Generate the prompt** using the same structuring principles (goal, constraints, deliverables, existing knowledge) but formatted for ChatGPT's Deep Research interface. ChatGPT Deep Research asks clarifying questions before starting (unlike the API which expects fully-formed prompts), so the prompt can be slightly more open-ended while still being detailed.
+3. **Present in chat** for the user to `/copy`. Do NOT execute the prompt or create any files at this stage.
+4. **When the user returns with results** (shares a file path, typically from a temp/downloads location), read the content, generate the filename from the report's topic (`YYYY-MM-DD_kebab-slug.md`), prepend frontmatter, move to `~/research/`, and confirm.
+
+The depth argument still matters for prompt crafting - a `deep via chatgpt` prompt should be more detailed and multi-faceted than a `normal via chatgpt` prompt.
+
+### Frontmatter for External Reports
+
+When filing an externally-sourced report, prepend lightweight YAML frontmatter for provenance and searchability:
+
+```yaml
+---
+date: YYYY-MM-DD
+source: chatgpt-deep-research
+query: "original prompt or topic summary"
+directory: working directory at time of request
+---
+```
+
+Skip fields that don't apply to external research (token counts, model version, processing time, max tool calls). The `source` field enables `grep -rl "source: chatgpt" ~/research/` to separate external from API-generated reports.
+
+### Recognition Patterns
+
+The user may signal results are ready with any of:
+- A file path (e.g. `C:\Users\Dimitri\Documents\Temp Docs\report.md`)
+- "file it", "research result", "here's the report"
+- Dropping a file path with minimal context after a `via chatgpt` prompt was generated earlier in the session
 
 ## Credentials
 

@@ -104,15 +104,30 @@ def find_skill_source(name: str) -> Path | None:
     return None
 
 
-def hash_directory(path: Path) -> str:
+def load_nosync(skill_path: Path) -> set[str]:
+    """Load .nosync file listing per-install files to preserve during sync.
+
+    Files listed in .nosync are excluded from hash comparison and are not
+    overwritten at the target. The .nosync file itself is also excluded.
+    """
+    nosync_file = skill_path / ".nosync"
+    if not nosync_file.exists():
+        return set()
+    return {line.strip() for line in nosync_file.read_text().splitlines() if line.strip() and not line.startswith("#")} | {".nosync"}
+
+
+def hash_directory(path: Path, exclude: set[str] | None = None) -> str:
     """Compute a hash of all files in a directory for comparison."""
     if not path.exists():
         return ""
+    exclude = exclude or set()
 
     hasher = hashlib.md5()
     for file_path in sorted(path.rglob("*")):
         if file_path.is_file():
             rel_path = file_path.relative_to(path)
+            if str(rel_path) in exclude or rel_path.name in exclude:
+                continue
             hasher.update(str(rel_path).encode())
             hasher.update(file_path.read_bytes())
     return hasher.hexdigest()
@@ -129,9 +144,11 @@ def analyze_sync_state(source: Path, target: Path, last_synced_hash: str | None)
     - target_changed: target differs from last sync (local edits)
     - in_sync: source and target match
     - status: one of 'in_sync', 'target_behind', 'target_modified', 'both_changed', 'missing'
+    - nosync: set of filenames to preserve at target
     """
-    source_hash = hash_directory(source)
-    target_hash = hash_directory(target) if target.exists() else ""
+    nosync = load_nosync(source)
+    source_hash = hash_directory(source, exclude=nosync)
+    target_hash = hash_directory(target, exclude=nosync) if target.exists() else ""
 
     result = {
         "source_hash": source_hash,
@@ -139,6 +156,7 @@ def analyze_sync_state(source: Path, target: Path, last_synced_hash: str | None)
         "source_exists": source.exists(),
         "target_exists": target.exists(),
         "in_sync": source_hash == target_hash and target.exists(),
+        "nosync": nosync,
     }
 
     if not target.exists():
@@ -222,12 +240,44 @@ def copy_skill(source: Path, target: Path, state: dict, force: bool = False, dry
     # Ensure parent directory exists
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    nosync = state.get("nosync", set())
+    preserved_files = {}
+    preserved_dirs = {}
+
+    # Preserve nosync entries before removing target
+    if target.exists() and nosync:
+        for name in nosync:
+            preserved_path = target / name
+            if preserved_path.exists():
+                if preserved_path.is_file():
+                    preserved_files[name] = preserved_path.read_bytes()
+                elif preserved_path.is_dir():
+                    tmp_dir = target.parent / f".nosync_backup_{name}"
+                    if tmp_dir.exists():
+                        shutil.rmtree(tmp_dir)
+                    shutil.copytree(preserved_path, tmp_dir)
+                    preserved_dirs[name] = tmp_dir
+
     # Remove existing target if it exists
     if target.exists():
         shutil.rmtree(target)
 
-    # Copy the skill
-    shutil.copytree(source, target)
+    # Copy the skill (excluding nosync entries from source — target's version is authoritative)
+    def _ignore_nosync(directory, contents):
+        rel = Path(directory).relative_to(source)
+        if rel == Path("."):
+            return [c for c in contents if c in nosync]
+        return []
+    shutil.copytree(source, target, ignore=_ignore_nosync if nosync else None)
+
+    # Restore preserved files and directories
+    for name, data in preserved_files.items():
+        (target / name).write_bytes(data)
+    for name, tmp_dir in preserved_dirs.items():
+        dest = target / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.move(str(tmp_dir), str(dest))
 
     result["action"] = "copied"
     result["success"] = True
@@ -510,7 +560,7 @@ def cmd_list(args) -> int:
 
     for skill in available:
         name = skill["name"]
-        scope_tag = " [local]" if skill["scope"] == "local" else ""
+        scope_tag = f" [{skill['scope']}]" if skill["scope"] != "public" else ""
         targets = installations.get(name, {})
         count = len(targets)
         status = f"({count} installation{'s' if count != 1 else ''})" if targets else "(not registered)"

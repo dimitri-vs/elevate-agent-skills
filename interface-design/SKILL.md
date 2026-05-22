@@ -260,6 +260,145 @@ Keep findings specific — file paths, line numbers, concrete deviations. Don't 
 
 ---
 
+## Design Iteration Loop
+
+When actively building or refining a screen, use a screenshot → review → fix cycle to converge on quality. This is a visual QA loop, not a code review.
+
+### How It Works
+
+1. **Screenshot the screen** using Playwright CLI to a known path. Save to a `screenshots/` dir in the project for consistency.
+
+   **Basic (viewport only):**
+   ```bash
+   npx playwright screenshot --viewport-size="393,852" --wait-for-timeout=5000 \
+     "http://localhost:8081/route" "screenshots/screen-name.png"
+   ```
+
+   **Full-page (scrollable content):**
+   ```bash
+   npx playwright screenshot --full-page --viewport-size="393,852" --wait-for-timeout=5000 \
+     "http://localhost:8081/route" "screenshots/screen-name-full.png"
+   ```
+
+   **Authenticated pages** (pages behind login):
+   ```bash
+   # Step 1 — save auth state once (opens a browser, you log in, close it):
+   npx playwright codegen http://localhost:8081/sign-in --save-storage=screenshots/auth.json
+
+   # Step 2 — capture authenticated pages using saved state:
+   npx playwright screenshot --load-storage=screenshots/auth.json --full-page \
+     --viewport-size="393,852" --wait-for-timeout=5000 \
+     "http://localhost:8081/" "screenshots/home-full.png"
+   ```
+   The `auth.json` file contains cookies and localStorage — gitignore it.
+
+   **Authenticated pages via Claude-in-Chrome** (when Playwright lacks auth state):
+
+   Playwright opens its own browser with no session, so it redirects to the login page for authenticated routes. If the user has Claude-in-Chrome open and already authenticated, capture the page from there using html2canvas injected via the JavaScript tool, then return the base64 data and save server-side. This avoids browser download dialogs entirely.
+
+   ```javascript
+   // Step 1 — run via mcp__claude-in-chrome__javascript_tool:
+   (async () => {
+     const script = document.createElement('script');
+     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+     document.head.appendChild(script);
+     await new Promise(r => script.onload = r);
+     const canvas = await html2canvas(document.body, { scale: 1, useCORS: true });
+     return canvas.toDataURL('image/png');
+   })()
+   ```
+
+   ```bash
+   # Step 2 — decode the returned base64 data URL and save (Bash):
+   echo "$DATA_URL" | sed 's/^data:image\/png;base64,//' | base64 -d > screenshots/screen-name.png
+   ```
+
+   ```powershell
+   # Step 2 — decode (PowerShell):
+   $base64 = $dataUrl -replace '^data:image/png;base64,',''
+   [IO.File]::WriteAllBytes("screenshots\screen-name.png", [Convert]::FromBase64String($base64))
+   ```
+
+   **Important:** Do NOT use `a.download = 'file.png'; a.click()` to trigger a browser download — Chrome's "Ask where to save" setting causes a modal dialog that blocks the extension and requires manual user interaction. Always return the base64 through the JS tool and decode server-side.
+
+   **Notes:**
+   - The 5-second wait is needed for Expo/React apps to render after JS bundle load.
+   - `--full-page` captures the entire scrollable height, not just the viewport.
+   - For lazy-loaded content, you may need a Puppeteer script that scrolls before capturing.
+   - Prefer Playwright for unauthenticated pages (simpler, reliable). Use the Chrome html2canvas approach only when auth is required and Playwright lacks session state.
+
+2. **Send to a reviewer** for aesthetic feedback. Rotate between multiple reviewers to get a focus-group effect rather than one opinionated voice:
+
+   | Reviewer | How to invoke | Best for |
+   |----------|--------------|----------|
+   | **Sonnet sub-agent** | `Agent` tool with `model: "sonnet"` | Quick score, describe the layout in the prompt |
+   | **Gemini Pro** | `gemini-review.py` CLI (see below) | Vision-native review from the actual screenshot file |
+   | **Codex** | `codex-review` skill | Deep code-aware review, but slower |
+
+3. **Apply aesthetic fixes** from the review. Only spacing, proportion, hierarchy, typography, and visual impact — never change copy or business logic based on reviewer feedback.
+4. **Re-screenshot and re-score.** Rotate to a different reviewer for fresh perspective.
+
+### Reviewer: Sonnet Sub-Agent
+
+Spawn with `model: "sonnet"`. Describe the screen layout in the prompt (the agent can't see the screenshot). Include:
+
+- Path to `interface-design.md` to read
+- Screen layout top-to-bottom with sizes, colors, spacing classes
+- "Score 0.0-10.0 aesthetics ONLY. Do NOT suggest copy changes."
+- Request 3–5 issues and 3–5 fixes
+
+### Reviewer: Gemini Pro (Vision)
+
+Uses the `gemini-review.py` CLI tool in the skill directory. Sends the actual screenshot image to Gemini for vision-based review — no need to describe the layout in text.
+
+```bash
+cd "<skill-directory>" && \
+  uv run gemini-review.py "path/to/screenshot.png" \
+    "Brief app description" \
+    -d "path/to/interface-design.md"
+```
+
+Arguments:
+- First positional: screenshot path (PNG/JPG)
+- Second positional: brief app/screen context string
+- `--design-doc` / `-d`: path to `interface-design.md` (attached as context)
+- `--model` / `-m`: override model (default: `gemini-3.1-pro-preview`, env: `GEMINI_REVIEW_MODEL`)
+- `--no-save`: skip saving to `~/reviews/`
+
+**API key setup:** `GOOGLE_GENAI_API_KEY` is required. The script checks (in order): env var → `<skill-directory>/.env` → `~/.env` → `./.env`. The key lives in the skill directory's `.env` file alongside this script (matching the pattern used by other elevate-agent-skills like `slack-canvas/` and `web-research/`).
+
+Results auto-save to `~/reviews/` with YAML frontmatter.
+
+### Reviewer: Codex
+
+Use the `codex-review` skill for deeper code-aware reviews. Best for checking design-system compliance across multiple files, not for quick aesthetic iteration.
+
+### Why Rotate Reviewers
+
+Each reviewer has a different personality:
+- **Sonnet** tends to be harsh and opinionated about proportions and hierarchy
+- **Gemini** focuses on visual weight, rhythm, and design-system consistency
+- **Codex** catches code-level issues (wrong tokens, missing states)
+
+Rotating prevents over-fitting to one reviewer's taste. When two reviewers converge on the same issue, it's real. When they disagree, it's subjective — use your judgment.
+
+### Guardrails
+
+The review agent is a **focus group, not a decision-maker.** Apply these rules:
+
+- **Follow:** Spacing, padding, proportion, font size, opacity, visual hierarchy, layout structure suggestions.
+- **Ignore:** Copy rewrites, button label changes, business logic opinions, feature suggestions, architectural recommendations.
+- **Never change client-specified copy** based on reviewer feedback, even if the reviewer says it's wrong. Copy changes require explicit user instruction.
+- **Use your judgment** on which fixes to apply. Not every suggestion is worth implementing — pick the ones that address real visual problems, skip the subjective preferences.
+
+### When to Stop
+
+- **Target score: 9.0/10.0** unless the user specifies otherwise.
+- Keep iterating until the user says to stop or scores plateau (two consecutive reviews within 0.5 points across different reviewers).
+- When reviewers converge on the same remaining issues, those are real — fix them. When they diverge, the screen is in taste territory — present the tradeoff to the user.
+
+---
+
 ## Maintaining the Doc
 
 After building significant UI, offer:

@@ -54,6 +54,19 @@ python skill-sync.py discover "/path/to/projects"
 
 The `local/` directory is gitignored and holds skills with personal or proprietary content. `skill-sync.py` scans both root and `local/` automatically — local skills show a `[local]` tag in `list` output and sync identically to public ones.
 
+## Syncing Safely
+
+**Never run `sync --force` without user confirmation.** The `--force` flag overwrites local edits at target locations, and those targets (e.g., `~/.claude/skills/`, Obsidian Vault) are typically not git repos — there's no version history to recover from.
+
+When `status` or `sync` reports `[LOCAL EDITS]`:
+
+1. **Read the target file first** to understand what changed locally.
+2. **Compare against the source** — the local edits may be improvements (bug fixes, prompt refinements discovered during real usage) that should be propagated back to the source, not discarded.
+3. If the local edits are better: update the source in `elevate-agent-skills`, then `sync` (no force needed since source is now newer).
+4. If the local edits are stale or wrong: confirm with the user before running `sync --force`.
+
+Recovery from an accidental `--force` requires mining Claude Code session JSONL transcripts or restoring from Kopia backups — both are slow and not guaranteed.
+
 ## Adding a New Skill
 
 1. Create directory: `<skill-name>/` (or `local/<skill-name>/` for private skills)

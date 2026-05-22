@@ -85,7 +85,10 @@ def log_research(depth: str, query: str, metrics: dict, success: bool = True):
 # gpt-5 + web_search (fast): ~1-2 min with low reasoning effort. Not yet profiled.
 DEPTH_CONFIGS = {
     "fast": {
-        "model": "gpt-5",
+        # gpt-5 is pinned to the Aug 2025 snapshot (does NOT auto-float).
+        # Bump default when a new frontier ships, or override via WEB_RESEARCH_FAST_MODEL.
+        # Current best as of 2026-04-25: gpt-5.5
+        "model": "gpt-5.5",
         "api": "responses",
         "tools": [{"type": "web_search"}],
         "reasoning": {"effort": "medium"},
@@ -93,10 +96,12 @@ DEPTH_CONFIGS = {
         "timeout": 300,  # 5 minutes
     },
     "normal": {
+        # No GPT-5-based deep-research API model exists yet (as of 2026-04-25).
+        # Override via WEB_RESEARCH_DEEP_MODEL when one ships.
         "model": "o3-deep-research",
         "api": "responses",
         "tools": [
-            {"type": "web_search_preview"},
+            {"type": "web_search"},
             {"type": "code_interpreter", "container": {"type": "auto"}},
         ],
         "max_output_tokens": 50000,
@@ -108,7 +113,7 @@ DEPTH_CONFIGS = {
         "model": "o3-deep-research",
         "api": "responses",
         "tools": [
-            {"type": "web_search_preview"},
+            {"type": "web_search"},
             {"type": "code_interpreter", "container": {"type": "auto"}},
         ],
         "max_output_tokens": 100000,
@@ -160,97 +165,28 @@ def get_api_key() -> str:
 
 
 def extract_content(response) -> str:
-    """Extract text content from OpenAI Responses API response."""
-    # Try output_text property first (convenience accessor)
-    if hasattr(response, 'output_text') and response.output_text:
-        return response.output_text
-
-    # Try output property with various structures
-    if hasattr(response, 'output') and response.output:
-        output = response.output
-
-        # If output is a string directly
-        if isinstance(output, str):
-            return output
-
-        # If output is a list
-        if isinstance(output, list):
-            texts = []
-            for item in output:
-                # Try content attribute
-                if hasattr(item, 'content') and item.content:
-                    if isinstance(item.content, str):
-                        texts.append(item.content)
-                    elif isinstance(item.content, list):
-                        for block in item.content:
-                            if hasattr(block, 'text') and block.text:
-                                texts.append(block.text)
-                            elif isinstance(block, str):
-                                texts.append(block)
-                # Try text attribute directly
-                elif hasattr(item, 'text') and item.text:
-                    texts.append(item.text)
-                # Try message attribute (some response formats)
-                elif hasattr(item, 'message'):
-                    msg = item.message
-                    if hasattr(msg, 'content') and msg.content:
-                        texts.append(msg.content)
-
-            if texts:
-                return "\n\n".join(texts)
-
-    # Last resort: try to get any text-like attribute
-    for attr in ['text', 'content', 'message', 'result']:
-        if hasattr(response, attr):
-            val = getattr(response, attr)
-            if isinstance(val, str) and val:
-                return val
-
-    return ""
+    """Extract text content via the canonical Responses API accessor."""
+    return getattr(response, "output_text", None) or ""
 
 
 def extract_citations(response) -> list[dict]:
-    """Extract citations/annotations from response."""
-    citations = []
+    """Extract URL citations from response.output[*].content[*].annotations.
 
-    # Helper to process annotations
-    def process_annotations(annotations):
-        if not annotations:
-            return
-        for ann in annotations:
-            url = None
-            title = ''
-            if hasattr(ann, 'url'):
-                url = ann.url
-            elif isinstance(ann, dict):
-                url = ann.get('url')
-                title = ann.get('title', '')
-            if url:
-                citations.append({
-                    "title": getattr(ann, 'title', title) if hasattr(ann, 'title') else title,
-                    "url": url,
-                })
-
-    if hasattr(response, 'output') and response.output:
-        output = response.output
-        if isinstance(output, list):
-            for item in output:
-                # Check content
-                if hasattr(item, 'content') and item.content:
-                    content = item.content
-                    if isinstance(content, list):
-                        for block in content:
-                            if hasattr(block, 'annotations'):
-                                process_annotations(block.annotations)
-                # Check annotations directly on item
-                if hasattr(item, 'annotations'):
-                    process_annotations(item.annotations)
-
-    # Also check top-level annotations
-    if hasattr(response, 'annotations'):
-        process_annotations(response.annotations)
-
-    return citations
+    Per OpenAI Responses API: url_citation annotations carry url + title.
+    Dedup happens later in format_output.
+    """
+    out = []
+    for item in (getattr(response, "output", None) or []):
+        for block in (getattr(item, "content", None) or []):
+            for ann in (getattr(block, "annotations", None) or []):
+                if getattr(ann, "type", "") == "url_citation":
+                    url = getattr(ann, "url", None)
+                    if url:
+                        out.append({
+                            "title": getattr(ann, "title", "") or url,
+                            "url": url,
+                        })
+    return out
 
 
 def format_progress_bar(elapsed: float, timeout: int, width: int = 30) -> str:
@@ -376,9 +312,15 @@ def research(
         Dict with 'content', 'citations', 'metadata', and 'metrics'
     """
     if api_key is None:
-        api_key = get_api_key()
+        api_key = get_api_key()  # also loads .env files into os.environ
 
-    config = DEPTH_CONFIGS.get(depth, DEPTH_CONFIGS["fast"])
+    config = dict(DEPTH_CONFIGS.get(depth, DEPTH_CONFIGS["fast"]))
+    # Env-var overrides for model — frontier moves; this lets users bump
+    # without editing code. See README/SKILL.md for env-var names.
+    if depth == "fast":
+        config["model"] = os.getenv("WEB_RESEARCH_FAST_MODEL", config["model"])
+    else:
+        config["model"] = os.getenv("WEB_RESEARCH_DEEP_MODEL", config["model"])
 
     client = OpenAI(
         api_key=api_key,
@@ -452,10 +394,11 @@ def slugify(text: str, max_length: int = 60) -> str:
 
 def generate_title(query: str, api_key: str) -> str | None:
     """Generate a short descriptive title for the research query using a fast model."""
+    title_model = os.getenv("WEB_RESEARCH_TITLE_MODEL", "gpt-5.4-nano")
     try:
         client = OpenAI(api_key=api_key, timeout=15)
         response = client.chat.completions.create(
-            model="gpt-5-mini-2025-08-07",
+            model=title_model,
             messages=[
                 {
                     "role": "system",

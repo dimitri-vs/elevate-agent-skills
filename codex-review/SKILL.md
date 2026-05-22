@@ -1,18 +1,21 @@
 ---
 name: codex-review
-description: Get an independent review from Codex CLI (OpenAI, via WSL) as a second opinion. Use after implementing features, completing plans, or finishing research/analysis to sanity-check work. Runs 1-5 minutes in background (longer for complex reviews). Invoke when user asks for a sanity check, second opinion, or Codex review.
+description: Get an independent review from Codex CLI (OpenAI, via WSL) as a second opinion. Use after implementing features, completing plans, finishing research/analysis, or anytime an unbiased third-party perspective would help - including non-code contexts like decisions, strategies, parenting situations, financial plans, or advice quality-checks. Runs 1-5 minutes in background (longer for complex reviews). Invoke when user asks for a sanity check, second opinion, or Codex review.
 ---
 
 # Codex Review
 
-Invoke OpenAI Codex CLI (via WSL) as an independent reviewer. Provides a "second set of eyes" from a different model to catch gaps, bugs, and missed considerations.
+Invoke OpenAI Codex CLI (via WSL) as an independent reviewer. Provides a "second set of eyes" from a different model to catch gaps, bugs, missed considerations, or blind spots - in code, research, or any domain where an unbiased third-party perspective adds value.
 
 ## When to Use
 
-- After implementing a plan or feature (most common)
+- After implementing a plan or feature
 - After completing data analysis or research
 - To validate an approach before implementing
+- As a second opinion on advice, strategies, or decisions (parenting, financial, health, business, etc.)
 - Anytime a sanity check from an independent party would be valuable
+
+Works for both technical and non-technical contexts. For non-code reviews, the prompt should include all relevant context inline (Codex won't have conversation history).
 
 ## Usage
 
@@ -56,7 +59,7 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 |-----|-------------|
 | `-w`, `--workdir` | Project directory (Windows path) — converted to WSL automatically |
 | `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write` |
-| `-e`, `--effort` | Review effort level: `standard` (default), `high`, `xhigh`. See below |
+| `-e`, `--effort` | Review effort level: `high` (default), `xhigh`. See below |
 | `--timeout` | Seconds before abort (default: 1800 = 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
 | `--no-save` | Skip saving to ~/reviews/ |
 
@@ -64,13 +67,26 @@ Runs in `--yolo` mode by default (no approvals, no sandbox) since nobody is pres
 
 ### Effort levels
 
-Each level controls reasoning effort. Default is `standard`, which is good for most reviews. Only escalate when the task genuinely needs it.
+Default is `high`, which is good for most reviews. Escalate to `xhigh` only when the task genuinely needs deeper analysis.
 
-| Effort | Reasoning | Typical time | Use when |
-|--------|-----------|--------------|----------|
-| `standard` | medium | ~1 min | Most reviews (default) |
-| `high` | high | 2-5 min | Complex multi-file reviews, subtle bugs |
-| `xhigh` | xhigh | 5-20 min | Deep architectural analysis, exhaustive review |
+| Effort | Model | Reasoning | Typical time | Use when |
+|--------|-------|-----------|--------------|----------|
+| `high` | gpt-5.3-codex | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
+| `xhigh` | gpt-5.5 | xhigh | 5-20 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
+
+### Model selection
+
+The script uses a **tiered model strategy** based on effort level (as of 2026-05-20):
+
+- **`high` (default) → `gpt-5.3-codex`** — the better daily driver for routine code review, plan validation, and bug hunting. ~3x cheaper on Plus credits (43.75/350 vs 125/750 per 1M tokens input/output), more predictable, and OpenAI still describes it as an "industry-leading coding model for complex software engineering."
+- **`xhigh` → `gpt-5.5`** — the stronger peak model for hard, ambiguous, or long-horizon tasks. Benchmarks are higher (SWE-Bench Pro 58.6% vs 56.8%, Terminal-Bench 82.7% vs 77.3%), but it burns Plus quota ~3x faster and has had intermittent Codex-specific regressions (compaction failures, inconsistent multi-file edits). Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
+
+Override either default via `CODEX_REVIEW_MODEL` env var (applies to all effort levels).
+
+Notes:
+- **ChatGPT-account auth** (the typical setup): Codex does NOT support the floating `gpt-5-codex` alias — pass a versioned snapshot. Accepted strings per [Codex docs](https://developers.openai.com/codex/models): `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2`.
+- **API-key auth**: the floating `gpt-5-codex` alias works and auto-updates within the codex line. Set `CODEX_REVIEW_MODEL=gpt-5-codex` if you're on API-key auth.
+- **CLI version matters**: newer models require recent Codex CLI versions. The wrapper surfaces a non-blocking warning encouraging you to upgrade to the latest version when your installed CLI is out of date. Run `wsl npm install -g @openai/codex@latest` to upgrade.
 
 ## Writing the Review Prompt
 
@@ -100,6 +116,18 @@ This is the most common use case — after implementing a plan, check completene
 >
 > Review the following research/analysis for accuracy, completeness, and any missed considerations. Verify claims where possible by examining the source data or code. Flag anything that seems incorrect, unsupported, or worth double-checking. {additional context about what was analyzed}
 
+### Advisory / decision review (non-code)
+
+For situations where Claude has been giving advice (parenting, health, financial, strategic, etc.) and the user wants an independent second opinion. Since Codex has no conversation history, the prompt must be self-contained with all relevant context.
+
+Structure the prompt as:
+1. **Background** — who's involved, relevant history, constraints
+2. **The situation** — what happened, what's being decided
+3. **Advice given** — the specific recommendations being reviewed
+4. **Review task** — what to assess (what's right, what's missing, what's wrong, additional recommendations)
+
+The `--workdir` flag is still required but less important for non-code reviews. Point it at the CWD (usually the Obsidian Vault) so Codex can optionally read related documents if referenced. Always write these prompts to a temp file first — they're long and have special characters.
+
 Adapt these freely — they're starting points, not rigid templates.
 
 ## Interpreting Results & Taking Action
@@ -114,11 +142,11 @@ Codex output is verbose. **Do NOT blindly relay all recommendations.** The first
 
 | Bucket | Criteria | Action |
 |--------|----------|--------|
-| **Fix now** | Clear bugs, correctness issues, unambiguously wrong. You're confident it's a real problem. | Go ahead and fix immediately — no need to ask first. |
-| **Note** | Pre-existing issues not introduced by this change, debatable improvements, "yes but" items, things with tradeoffs. | Include in summary but don't fix unless the user asks. |
+| **Act on** | Clear bugs, correctness issues, factual errors, or important missed considerations. You're confident it's a real problem. | For code: fix immediately. For advisory: surface prominently to the user. |
+| **Note** | Pre-existing issues, debatable improvements, "yes but" items, things with tradeoffs, alternative perspectives worth considering. | Include in summary but don't act on unless the user asks. |
 | **Noise** | Generic advice, low-priority nitpicks, things not worth addressing now. | Mention briefly in summary, grouped together. |
 
-4. **Fix** all "Fix now" items, then present a **single summary** covering all findings — what was fixed, what was noted, and what was triaged as noise. A compact table works well:
+4. **Act on** all actionable items (fix code, or surface advisory findings to the user), then present a **single summary** covering all findings. A compact table works well:
 
 ```
 | # | Finding | Severity | Action |
@@ -128,18 +156,18 @@ Codex output is verbose. **Do NOT blindly relay all recommendations.** The first
 | 3 | localStorage shape validation | Low | Noise — not worth addressing now |
 ```
 
-Expect **1-3 actionable fixes** per review. If you're fixing more than 4-5 things, you're probably not filtering aggressively enough.
+Expect **1-3 actionable items** per review. If you're surfacing more than 4-5 things, you're probably not filtering aggressively enough.
 
 ## When Invoked
 
 1. Determine review context — ask the user if unclear:
-   - What project directory?
-   - What should Codex review? (plan file, recent changes, custom)
-2. Write the full review prompt (see patterns above)
+   - What project directory? (for non-code reviews, use the CWD)
+   - What should Codex review? (plan file, recent changes, advice given in this conversation, custom)
+2. Write the full review prompt (see patterns above). For non-code advisory reviews, include all relevant context inline since Codex has no conversation history.
 3. Run using the **Bash** tool directly with `run_in_background: true` — **never** a Task/subagent (see Usage above for why)
 4. Continue working on other things while waiting
 5. When the background task completes, read output with **TaskOutput**
-6. Triage findings (see above), fix the clear wins, then present the full summary table
+6. Triage findings (see above), act on the clear wins, then present the full summary table
 
 ## Saved Reviews
 

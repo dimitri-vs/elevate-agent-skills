@@ -12,6 +12,10 @@ manifest.json
 __pycache__/
 *.pyc
 
+# Playwright temp files
+.playwright-cli/
+.pw-tmp/
+
 # OS
 .DS_Store
 Thumbs.db
