@@ -5,7 +5,7 @@ description: Strip Claude writing tells (em-dashes, "Not X, but Y" contrastives,
 
 # humanize
 
-The `humanize` CLI strips Claude writing tells via an LLM rewrite pass + light heuristic texture. Source: https://github.com/dimitri-vs/elevate-humanizer
+The `humanize` CLI strips Claude writing tells via an LLM rewrite pass + light heuristic texture. Source: https://github.com/dimitri-vs/elevate-humanizer. The humanization logic is a standalone CLI so it's usable outside Claude Code (scripts, other agents, manual shell use); this skill is just the integration layer.
 
 ## How to invoke
 
@@ -105,6 +105,12 @@ The three flags are mutually exclusive.
 | `--temperature FLOAT` | 0.8 | LLM sampling temperature |
 | `--min-length-ratio FLOAT` | 0.4 | Safety fallback - if output is shorter than this ratio of input, return the original |
 | `--max-tokens INT` | 8192 | Output-length ceiling in tokens. Raise for long-form inputs that hit truncation |
+| `--style-file PATH` | `~/.config/humanize/style.md` | Path to a personal style file. Loaded automatically if present. |
+| `--no-style` | — | Skip loading the personal style file for this run |
+
+## Personal style
+
+The CLI auto-loads `~/.config/humanize/style.md` if it exists. This contains persistent personal writing preferences (formatting conventions, tone rules) injected into the LLM prompt on every run. If the file is absent, nothing changes. Use `--no-style` to skip it for a single run.
 
 ## Temp-file pattern
 
