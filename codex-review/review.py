@@ -26,29 +26,27 @@ from pathlib import Path, PureWindowsPath
 
 REVIEWS_DIR = Path.home() / "reviews"
 
-# Codex CLI model selection notes (as of 2026-05-20):
+# Codex CLI model selection notes (as of 2026-06-02):
 # - Under ChatGPT-account auth, Codex does NOT support the floating gpt-5-codex
 #   alias (API-key auth only). ChatGPT users must pass a versioned snapshot.
 # - Allowed strings per developers.openai.com/codex/models: gpt-5.5, gpt-5.4,
-#   gpt-5.4-mini, gpt-5.3-codex, gpt-5.2 (and Pro-only gpt-5.3-codex-spark).
-# - Newer models also require a recent CLI: gpt-5.5 needs CLI ≳ 0.115; older
-#   CLIs reject it with "requires a newer version of Codex". The wrapper
-#   surfaces a non-blocking upgrade warning before the request hits Codex.
-# - Tiered model strategy (2026-05-20): gpt-5.3-codex for routine work (high),
-#   gpt-5.5 for hard/ambiguous tasks (xhigh). 5.3-codex is ~3x cheaper on Plus
-#   credits, more predictable, and sufficient for most code review. 5.5 is the
-#   stronger peak model but burns quota faster and has had intermittent regressions.
+#   gpt-5.4-mini (and Pro-only gpt-5.3-codex-spark).
+# - REMOVED 2026-06-02: gpt-5.3-codex, gpt-5.2 — OpenAI dropped these from
+#   ChatGPT-account auth server-side. See github.com/openai/codex/issues/25808.
+# - Tiered model strategy (2026-06-02): gpt-5.4 for routine work (high),
+#   gpt-5.5 for hard/ambiguous tasks (xhigh). 5.4 is more cost-effective on
+#   Plus/Team credits and sufficient for most code review. 5.5 is the stronger
+#   peak model but burns quota faster. Users hitting rate limits should try 5.4.
 # - Override at runtime via CODEX_REVIEW_MODEL (applies to all effort levels).
-# - "standard" (medium reasoning) was dropped — in practice we always use high/xhigh.
 EFFORT_PRESETS = {
-    "high":  {"model": "gpt-5.3-codex", "reasoning": "high"},
+    "high":  {"model": "gpt-5.4", "reasoning": "high"},
     "xhigh": {"model": "gpt-5.5", "reasoning": "xhigh"},
 }
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
 # when the user's local CLI is significantly behind. Bump this periodically.
-LAST_KNOWN_CODEX_CLI = (0, 132, 0)
-LAST_KNOWN_CODEX_CLI_DATE = "2026-05-20"
+LAST_KNOWN_CODEX_CLI = (0, 136, 0)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-06-02"
 
 
 def win_to_wsl(path: str) -> str:

@@ -71,20 +71,20 @@ Default is `high`, which is good for most reviews. Escalate to `xhigh` only when
 
 | Effort | Model | Reasoning | Typical time | Use when |
 |--------|-------|-----------|--------------|----------|
-| `high` | gpt-5.3-codex | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
+| `high` | gpt-5.4 | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
 | `xhigh` | gpt-5.5 | xhigh | 5-20 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
 
 ### Model selection
 
-The script uses a **tiered model strategy** based on effort level (as of 2026-05-20):
+The script uses a **tiered model strategy** based on effort level (as of 2026-06-02):
 
-- **`high` (default) → `gpt-5.3-codex`** — the better daily driver for routine code review, plan validation, and bug hunting. ~3x cheaper on Plus credits (43.75/350 vs 125/750 per 1M tokens input/output), more predictable, and OpenAI still describes it as an "industry-leading coding model for complex software engineering."
-- **`xhigh` → `gpt-5.5`** — the stronger peak model for hard, ambiguous, or long-horizon tasks. Benchmarks are higher (SWE-Bench Pro 58.6% vs 56.8%, Terminal-Bench 82.7% vs 77.3%), but it burns Plus quota ~3x faster and has had intermittent Codex-specific regressions (compaction failures, inconsistent multi-file edits). Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
+- **`high` (default) → `gpt-5.4`** — the cost-effective daily driver for routine code review, plan validation, and bug hunting. Exactly **2x cheaper per token** than gpt-5.5 (62.50/375 vs 125/750 per 1M input/output credits), translating to roughly 25-33% more messages per 5-hour window on Plus/Team plans. Users hitting rate limits should prefer this tier.
+- **`xhigh` → `gpt-5.5`** — the stronger peak model for hard, ambiguous, or long-horizon tasks. Higher benchmarks (Terminal-Bench 82.7% vs 75.1%, Expert-SWE 73.1% vs 68.5%) but burns quota 2x faster. Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
 
 Override either default via `CODEX_REVIEW_MODEL` env var (applies to all effort levels).
 
 Notes:
-- **ChatGPT-account auth** (the typical setup): Codex does NOT support the floating `gpt-5-codex` alias — pass a versioned snapshot. Accepted strings per [Codex docs](https://developers.openai.com/codex/models): `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2`.
+- **ChatGPT-account auth** (the typical setup): Codex does NOT support the floating `gpt-5-codex` alias — pass a versioned snapshot. Accepted strings per [Codex docs](https://developers.openai.com/codex/models): `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Note: `gpt-5.3-codex` and `gpt-5.2` were removed from ChatGPT-account auth on 2026-06-02.
 - **API-key auth**: the floating `gpt-5-codex` alias works and auto-updates within the codex line. Set `CODEX_REVIEW_MODEL=gpt-5-codex` if you're on API-key auth.
 - **CLI version matters**: newer models require recent Codex CLI versions. The wrapper surfaces a non-blocking warning encouraging you to upgrade to the latest version when your installed CLI is out of date. Run `wsl npm install -g @openai/codex@latest` to upgrade.
 
