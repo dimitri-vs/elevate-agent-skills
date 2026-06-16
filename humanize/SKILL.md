@@ -18,6 +18,27 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 > **Bash timeout:** Default model is now Sonnet 4.6 (fast, ~15-30s for most inputs). For long inputs (1000+ words), set `timeout: 300000` or use `run_in_background: true`. Pass `-m claude-opus-4-7` for maximum quality on high-stakes content (slower, 1-3 min).
 > - **If Claude Code's Bash display truncates the output** (appears empty after a long run), re-run redirecting to `/tmp/humanize/out.md` and `cat` the file (see [Temp-file pattern](#temp-file-pattern) below).
 
+## Default delivery: `--open` (do NOT re-type the result)
+
+For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — pass `-O`/`--open`. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default app (Typora on this machine), printing **only the file path** to stdout.
+
+```bash
+humanize --open <<'EOF'
+...draft body...
+EOF
+```
+
+Then tell the user something brief like "Opened the humanized version — `<path>`." **Do not paste the humanized text back into the terminal.** The whole point is to avoid re-transcribing prose you already drafted: draft it silently, pipe it through `humanize --open`, and report that it's open. Never show the pre-humanized draft either — go straight to the humanized file.
+
+Old temp files (>24h) are swept automatically on each `--open` run; no cleanup needed.
+
+### Iterating on an opened result
+
+The printed path is a normal file you can edit:
+
+- **Wording tweak** the user requests ("drop the last line", "make it warmer"): `Read` the file, `Edit` it in place. Typora reloads automatically. This is a plain prose edit, not another humanize pass — no API call.
+- **Re-humanize differently** ("do it harder", "treat as a Slack DM"): pipe the file back through, producing a fresh file and preserving the original: `cat <path> | humanize -t --open`.
+
 **Prefer a heredoc over creating a scratch file.** Anything generated in the current conversation should pipe directly via heredoc, not via a temp file you cat back. Single-quoted delimiters (`<<'EOF'`) prevent shell expansion, so apostrophes, `"quotes"`, URLs, and `$` all pass through verbatim.
 
 ```bash
@@ -70,7 +91,7 @@ Any warnings go to stderr and do not pollute piped output.
 
 - Technical documentation, code comments, API reference, JSON, or structured data. The CLI strips structure (bullets, headers, colon-before-list) which is appropriate for prose but wrong for reference material.
 - Text that is already conversational and plainly-written. The humanizer does real work only when tells are present.
-- Text under ~100 characters — the default `--min-length-ratio 0.4` safety fallback will often trigger and return the original unchanged. Pass `--min-length-ratio 0.1` for short inputs if you really want a rewrite attempt.
+- Text that is already conversational and short — the humanizer does real work only when tells are present. (There's a built-in degenerate-output guard that only reverts near-empty rewrites, so normal short text passes through fine.)
 
 ## Unconditional cleanup (always on)
 
@@ -103,14 +124,29 @@ The three flags are mutually exclusive.
 | `--no-heuristic` | — | Disable heuristic pass (unconditional cleanup still runs) |
 | `-m, --model ID` | `claude-sonnet-4-6` | Anthropic model ID. Use `-m claude-opus-4-7` for maximum quality on high-stakes content. |
 | `--temperature FLOAT` | 0.8 | LLM sampling temperature |
-| `--min-length-ratio FLOAT` | 0.4 | Safety fallback - if output is shorter than this ratio of input, return the original |
 | `--max-tokens INT` | 8192 | Output-length ceiling in tokens. Raise for long-form inputs that hit truncation |
 | `--style-file PATH` | `~/.config/humanize/style.md` | Path to a personal style file. Loaded automatically if present. |
 | `--no-style` | — | Skip loading the personal style file for this run |
+| `-O, --open` | — | Write the result to a self-cleaning temp file and open it with the OS default app; print only the path to stdout. Default for interactive "draft + humanize" delivery (see above). |
 
 ## Personal style
 
 The CLI auto-loads `~/.config/humanize/style.md` if it exists. This contains persistent personal writing preferences (formatting conventions, tone rules) injected into the LLM prompt on every run. If the file is absent, nothing changes. Use `--no-style` to skip it for a single run.
+
+### When to keep the personal style vs. dial it back
+
+The personal style is derived from Dimitri's real correspondence and is aggressive about compression: cut to ~half length, strip greetings/closers/sign-offs, answer-and-stop. That's exactly right for the **common case** and should stay the default:
+
+- **Correspondence (default — style ON):** Slack replies, emails, Upwork messages, DMs, status updates, quick replies. Just run `humanize --open`. The aggressive compression is the point here.
+
+But that same compression can **strip substance from load-bearing copy**, where length and specific claims are the deliverable. For these, dial it back:
+
+- **Marketing / sales / proposals / landing-page copy / essays / cover letters:** the value proposition and any CTA are load-bearing — don't let them get compressed away. Either:
+  - keep his voice but fence the substance: `humanize --open -s "Preserve the value proposition, specific claims, and any call-to-action. Don't cut length or drop substantive points."`, or
+  - skip the personal style entirely: `humanize --open --no-style` (still strips generic Claude tells, just without the aggressive personal compression).
+- **Formal / legal / technical docs:** `--no-style` (and usually don't humanize at all — see [When NOT to use](#when-not-to-use)).
+
+Rule of thumb: if making the text *shorter and barer* would lose information the reader needs, dial back the style. If shorter-and-barer is strictly better (most correspondence), let it run.
 
 ## Temp-file pattern
 
@@ -142,10 +178,10 @@ When running several humanize passes in one session (e.g. comparing models, or i
 
 When you have text in the current conversation that should be humanized:
 
-1. **Default: pipe directly via heredoc.** A single-quoted heredoc (`humanize <<'EOF' ... EOF`) handles multi-paragraph prose, apostrophes, quotes, URLs, and `$` signs without scratch files or escaping gymnastics.
-2. **If the content is already on disk**, `cat path.md | humanize`.
-3. **Use the [temp-file pattern](#temp-file-pattern)** when (a) the content is genuinely long-form (roughly >5KB / essay-length), (b) you need to keep the input around for diffing/comparison, (c) the text contains a literal line `EOF` that would terminate the heredoc early, or (d) the Bash-tool display truncated a previous run.
-4. Show the humanized result to the user. Offer to apply it back to the original destination (chat window, file, PR description).
+1. **Default: pipe via heredoc with `--open`.** A single-quoted heredoc (`humanize --open <<'EOF' ... EOF`) handles multi-paragraph prose, apostrophes, quotes, URLs, and `$` signs without scratch files or escaping gymnastics, and the result opens in a file instead of flooding the terminal. Report the path; don't re-type the content. See [Default delivery](#default-delivery---open-do-not-re-type-the-result).
+2. **If the content is already on disk**, `cat path.md | humanize --open`.
+3. **Drop `--open` only when the caller needs the text on stdout** — e.g. piping onward (`| Set-Clipboard`), or another tool consumes it.
+4. **Use the [temp-file pattern](#temp-file-pattern)** when (a) the content is genuinely long-form (roughly >5KB / essay-length), (b) you need to keep the input around for diffing/comparison, (c) the text contains a literal line `EOF` that would terminate the heredoc early, or (d) the Bash-tool display truncated a previous run.
 
 Avoid creating scratch files in the project working directory just to `cat` them through the pipe — either use a heredoc (default) or `/tmp/humanize/` (when heredoc won't do).
 
