@@ -24,6 +24,7 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |
 | **tailwindcss-skill** | Tailwind CSS v4 fundamentals — installation, CSS-first config, design systems |
 | **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5 + web_search) and deep research (o3-deep-research) |
+| **xquik-x-research** | Xquik REST API patterns for current X data research and automation |
 
 ## Getting Started
 
