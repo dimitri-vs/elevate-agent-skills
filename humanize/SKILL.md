@@ -23,7 +23,7 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — **always pass `-O`/`--open`**, including when you also pass `-s` steering. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default app (Typora on this machine), printing **only the file path** to stdout. The *only* time you omit `--open` is when the output is being piped onward (e.g. `| Set-Clipboard`) or consumed by another tool.
 
 ```bash
-humanize --open <<'EOF'
+humanize --open --context "<what this message is>" <<'EOF'
 ...draft body...
 EOF
 ```
@@ -31,6 +31,21 @@ EOF
 Then tell the user something brief like "Opened the humanized version — `<path>`." **Do not paste the humanized text back into the terminal.** The whole point is to avoid re-transcribing prose you already drafted: draft it silently, pipe it through `humanize --open`, and report that it's open. Never show the pre-humanized draft either — go straight to the humanized file.
 
 Old temp files (>24h) are swept automatically on each `--open` run; no cleanup needed.
+
+## Always pass `--context`
+
+The humanizer cannot see what kind of message it's rewriting — it only gets the text. So **always pass `-c`/`--context` with a few words describing the situation.** This drives register, formality, and especially greetings: by default the humanizer drops the greeting, and only keeps one when the context says it's an initial/cold outreach.
+
+This is distinct from `-s`/`--steering` (explicit rules, passed rarely). Context is a situational description, passed every time. Examples:
+
+```bash
+humanize --open --context "Slack thread reply to a teammate" <<'EOF' ... EOF
+humanize --open --context "cold outreach email to a prospect" <<'EOF' ... EOF
+humanize --open --context "Basecamp reply, ongoing thread, non-technical client" <<'EOF' ... EOF
+humanize --open --context "reply in an existing email thread" <<'EOF' ... EOF
+```
+
+If you genuinely can't tell, default to describing it as a reply in an ongoing thread — that's the common case and the safer assumption (no greeting).
 
 ### Iterating on an opened result
 
@@ -119,6 +134,7 @@ The three flags are mutually exclusive.
 | Flag | Default | Purpose |
 |---|---|---|
 | `-s, --steering TEXT` | none | Extra steering rules appended to the prompt. Only pass when the user gives explicit direction (e.g. "this is a Twitter post") or specific constraints. Do not add agent-decided steering - the tool runs well without it. |
+| `-c, --context TEXT` | none | Short description of what the message is (Slack thread reply, cold outreach, etc.). **Pass this every run** — it drives register and greeting. See [Always pass --context](#always-pass---context). |
 | `-t, --heuristic-texture` | — | Force heavy heuristic intensity |
 | `-l, --heuristic-light` | — | Force light heuristic (same as default; for explicitness) |
 | `--no-heuristic` | — | Disable heuristic pass (unconditional cleanup still runs) |
@@ -127,6 +143,8 @@ The three flags are mutually exclusive.
 | `--max-tokens INT` | 8192 | Output-length ceiling in tokens. Raise for long-form inputs that hit truncation |
 | `--style-file PATH` | `~/.config/humanize/style.md` | Path to a personal style file. Loaded automatically if present. |
 | `--no-style` | — | Skip loading the personal style file for this run |
+| `--substitutions-file PATH` | `~/.config/humanize/substitutions.py` | Personal regex substitutions (`SUBSTITUTIONS=[(pattern, replacement), ...]`), applied deterministically as the final step. Auto-loaded if present. |
+| `--no-substitutions` | — | Skip personal substitutions for this run |
 | `-O, --open` | — | Write the result to a self-cleaning temp file and open it with the OS default app; print only the path to stdout. Default for interactive "draft + humanize" delivery (see above). |
 
 ## Personal style
@@ -147,6 +165,10 @@ But that same compression can **strip substance from load-bearing copy**, where 
 - **Formal / legal / technical docs:** `--no-style` (and usually don't humanize at all — see [When NOT to use](#when-not-to-use)).
 
 Rule of thumb: if making the text *shorter and barer* would lose information the reader needs, dial back the style. If shorter-and-barer is strictly better (most correspondence), let it run.
+
+## Personal substitutions (guaranteed)
+
+Some conventions are mechanical and must always hold, so they're enforced deterministically (not via the prompt) in `~/.config/humanize/substitutions.py` — a `SUBSTITUTIONS = [(regex, replacement), ...]` list applied as the final step every run. Currently: `e.g.`→`eg.`, `i.e.`→`ie.`, and commas pushed outside quotes (`"like this",`). Universal non-typable Unicode (em-dashes, arrows `→`→`>`, ellipsis) is stripped always, regardless of this file. Edit that file to add conventions; no need to touch the prompt or this skill.
 
 ## Temp-file pattern
 
