@@ -20,7 +20,7 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 
 ## Default delivery: `--open` (do NOT re-type the result)
 
-For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — pass `-O`/`--open`. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default app (Typora on this machine), printing **only the file path** to stdout.
+For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — **always pass `-O`/`--open`**, including when you also pass `-s` steering. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default app (Typora on this machine), printing **only the file path** to stdout. The *only* time you omit `--open` is when the output is being piped onward (e.g. `| Set-Clipboard`) or consumed by another tool.
 
 ```bash
 humanize --open <<'EOF'
@@ -46,15 +46,15 @@ The printed path is a normal file you can edit:
 humanize "your short claude-sounding sentence"
 echo "your short text" | humanize
 
-# Multi-paragraph prose generated in this session: use a heredoc (default)
-humanize <<'EOF'
+# Multi-paragraph prose generated in this session: heredoc + --open (default delivery)
+humanize --open <<'EOF'
 First paragraph of the draft.
 
 Second paragraph, with apostrophes, "quotes", URLs (https://example.com) and $dollar signs preserved because the single-quoted delimiter blocks shell expansion.
 EOF
 
-# Heredoc + steering (only pass when user gives explicit direction)
-humanize -s "This is a Twitter post." <<'EOF'
+# Heredoc + steering (only pass steering when user gives explicit direction) — still --open
+humanize --open -s "This is a Twitter post." <<'EOF'
 ...draft body...
 EOF
 
