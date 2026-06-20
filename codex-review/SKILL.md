@@ -62,6 +62,9 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 | `-e`, `--effort` | Review effort level: `high` (default), `xhigh`. See below |
 | `--timeout` | Seconds before abort (default: 1800 = 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
 | `--no-save` | Skip saving to ~/reviews/ |
+| `--accounts` | List available auth profiles and show which is active |
+| `--account-setup NAME` | Save current Codex login as a named profile |
+| `-a`, `--account NAME` | Use a named auth profile for this review |
 
 Runs in `--yolo` mode by default (no approvals, no sandbox) since nobody is present to approve prompts in non-interactive mode.
 
@@ -168,6 +171,39 @@ Expect **1-3 actionable items** per review. If you're surfacing more than 4-5 th
 4. Continue working on other things while waiting
 5. When the background task completes, read output with **TaskOutput**
 6. Triage findings (see above), act on the clear wins, then present the full summary table
+
+## Account Profiles
+
+Optional. By default, Codex uses whatever account is logged in (`~/.codex/auth.json`). If you have multiple OpenAI accounts (e.g. an agency Team plan and a personal Plus plan), you can save named profiles and switch between them with `-a`.
+
+Profiles are stored as `~/.codex/<name>.auth.json` — alongside the main auth file, no extra directories. The active auth.json is swapped for the duration of the review and restored afterward (even on crash).
+
+### One-time setup
+
+```bash
+# 1. Already logged in as agency → save it
+cd "<skill-directory>" && uv run review.py --account-setup agency
+
+# 2. Log out, log in with personal account
+wsl bash -lic "codex logout && codex login"
+
+# 3. Save personal profile
+cd "<skill-directory>" && uv run review.py --account-setup personal
+```
+
+### Using profiles
+
+```bash
+# List profiles and see which is active
+cd "<skill-directory>" && uv run review.py --accounts
+
+# Run a review with a specific account
+cd "<skill-directory>" && uv run review.py -a personal -w "C:\path\to\project" "Review prompt"
+```
+
+When `-a` is used, the script swaps auth.json before running Codex and restores the original after — including saving any token refreshes back to the profile. If no profiles are set up, `-a` is simply unavailable and everything works as before.
+
+The account name is recorded in saved review frontmatter (`account: personal` or `account: default`).
 
 ## Saved Reviews
 

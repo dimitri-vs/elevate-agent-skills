@@ -15,12 +15,15 @@ Usage:
 """
 
 import argparse
+import base64
+import json
 import os
 import re
 import shlex
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 
@@ -103,9 +106,120 @@ def resolve_model(effort: str) -> str:
     return os.getenv("CODEX_REVIEW_MODEL", EFFORT_PRESETS[effort]["model"])
 
 
+# ---------------------------------------------------------------------------
+# Auth profile management
+# ---------------------------------------------------------------------------
+
+def _wsl(cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["wsl", "bash", "-lc", cmd],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def _jwt_claims(token: str) -> dict:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    try:
+        payload = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+
+def _read_auth(path: str = "$HOME/.codex/auth.json") -> dict | None:
+    r = _wsl(f"cat {path}")
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+
+def _validate_profile_name(name: str) -> None:
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        print("Profile name must contain only letters, digits, hyphens, underscores.",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def list_profiles() -> None:
+    current = _read_auth()
+    current_id = (current or {}).get("tokens", {}).get("account_id")
+
+    r = _wsl("ls -1 $HOME/.codex/*.auth.json 2>/dev/null")
+    if r.returncode != 0 or not r.stdout.strip():
+        print("No profiles configured. Use --account-setup <name> to save the current login.")
+        return
+
+    for line in r.stdout.strip().splitlines():
+        fpath = line.strip()
+        name = fpath.rsplit("/", 1)[-1].removesuffix(".auth.json")
+        profile = _read_auth(shlex.quote(fpath))
+        active = False
+        details = []
+        if profile:
+            tok = profile.get("tokens", {})
+            active = tok.get("account_id") == current_id and current_id is not None
+            claims = _jwt_claims(tok.get("id_token", ""))
+            auth_info = claims.get("https://api.openai.com/auth", {})
+            plan = auth_info.get("chatgpt_plan_type", "")
+            if plan:
+                details.append(plan)
+            email = claims.get("email", "")
+            if email:
+                details.append(email)
+        desc = f" — {', '.join(details)}" if details else ""
+        marker = " (active)" if active else ""
+        print(f"  {name}{desc}{marker}")
+
+
+def setup_profile(name: str) -> None:
+    r = _wsl("test -f $HOME/.codex/auth.json && echo ok")
+    if "ok" not in (r.stdout or ""):
+        print("No auth.json found. Run 'codex login' first.", file=sys.stderr)
+        sys.exit(1)
+    dest = f"$HOME/.codex/{name}.auth.json"
+    r = _wsl(f"cp $HOME/.codex/auth.json {dest}")
+    if r.returncode != 0:
+        print(f"Failed to save profile: {r.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    auth = _read_auth()
+    claims = _jwt_claims((auth or {}).get("tokens", {}).get("id_token", ""))
+    plan = claims.get("https://api.openai.com/auth", {}).get("chatgpt_plan_type", "")
+    label = f" ({plan})" if plan else ""
+    print(f"Saved current auth as '{name}'{label}")
+
+
+@contextmanager
+def use_profile(name: str | None):
+    """Swap auth.json to a named profile for the duration, then restore."""
+    if name is None:
+        yield
+        return
+
+    src = f"$HOME/.codex/{name}.auth.json"
+    r = _wsl(f"test -f {src} && echo ok")
+    if "ok" not in (r.stdout or ""):
+        print(f"Profile '{name}' not found. Use --accounts to list.", file=sys.stderr)
+        sys.exit(1)
+
+    _wsl("cp $HOME/.codex/auth.json $HOME/.codex/auth.json.bak")
+    _wsl(f"cp {src} $HOME/.codex/auth.json")
+    try:
+        yield
+    finally:
+        _wsl(f"cp $HOME/.codex/auth.json {src}")
+        _wsl("cp $HOME/.codex/auth.json.bak $HOME/.codex/auth.json")
+        _wsl("rm -f $HOME/.codex/auth.json.bak")
+
+
 def run_codex(prompt: str, workdir: str | None = None,
               sandbox: str | None = None, timeout: int = 1800,
-              effort: str = "high") -> tuple[str, int, float, str]:
+              effort: str = "high",
+              account: str | None = None) -> tuple[str, int, float, str]:
     """Run codex exec via WSL and return (output, exit_code, elapsed_secs, stderr).
 
     Default is --yolo mode (no approvals, no sandbox) since nobody is present
@@ -155,6 +269,8 @@ def run_codex(prompt: str, workdir: str | None = None,
     mode = f"sandbox: {sandbox}" if sandbox else "yolo (no approvals/sandbox)"
     print(f"Starting Codex review...", file=sys.stderr)
     print(f"  Directory: {workdir or '(current)'}", file=sys.stderr)
+    if account:
+        print(f"  Account:   {account}", file=sys.stderr)
     print(f"  Mode:      {mode}", file=sys.stderr)
     print(f"  Effort:    {effort} (model={model}, reasoning={reasoning})", file=sys.stderr)
     print(f"  Timeout:   {timeout // 60}m", file=sys.stderr)
@@ -230,7 +346,8 @@ def run_codex(prompt: str, workdir: str | None = None,
 def save_review(response: str, workdir: str | None, prompt: str,
                 *, status: str = "success", exit_code: int = 0,
                 elapsed: float = 0, stderr: str = "",
-                effort: str = "high") -> Path:
+                effort: str = "high",
+                account: str | None = None) -> Path:
     """Save review to ~/reviews/ with YAML frontmatter."""
     REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -249,6 +366,7 @@ def save_review(response: str, workdir: str | None, prompt: str,
         f"date: {now.isoformat()}\n"
         f"directory: {workdir or 'N/A'}\n"
         f"reviewer: codex\n"
+        f"account: {account or 'default'}\n"
         f"effort: {effort}\n"
         f"model: {resolve_model(effort)}\n"
         f"status: {status}\n"
@@ -288,7 +406,25 @@ def main():
                              "Override model via CODEX_REVIEW_MODEL env var.")
     parser.add_argument("--no-save", action="store_true",
                         help="Don't save results to ~/reviews/")
+    parser.add_argument("--accounts", action="store_true",
+                        help="List available auth profiles")
+    parser.add_argument("--account-setup", metavar="NAME",
+                        help="Save current Codex login as a named profile")
+    parser.add_argument("-a", "--account", metavar="NAME",
+                        help="Use a named auth profile for this review")
     args = parser.parse_args()
+
+    if args.accounts:
+        list_profiles()
+        return
+
+    if args.account_setup:
+        _validate_profile_name(args.account_setup)
+        setup_profile(args.account_setup)
+        return
+
+    if args.account:
+        _validate_profile_name(args.account)
 
     if args.prompt:
         prompt = args.prompt
@@ -299,9 +435,11 @@ def main():
     if not prompt:
         parser.error("Empty prompt")
 
-    response, exit_code, elapsed, stderr = run_codex(
-        prompt, args.workdir, args.sandbox, args.timeout, args.effort,
-    )
+    with use_profile(args.account):
+        response, exit_code, elapsed, stderr = run_codex(
+            prompt, args.workdir, args.sandbox, args.timeout, args.effort,
+            account=args.account,
+        )
 
     if exit_code != 0:
         status = "error"
@@ -319,6 +457,7 @@ def main():
                 status=status, exit_code=exit_code,
                 elapsed=elapsed, stderr=stderr,
                 effort=args.effort,
+                account=args.account,
             )
             print(f"Saved to: {saved}", file=sys.stderr)
         except Exception as e:
