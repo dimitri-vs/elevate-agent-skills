@@ -212,7 +212,9 @@ def poll_for_completion(client: OpenAI, response_id: str, timeout: int) -> dict:
     start_time = time.time()
     poll_interval = 15  # seconds (less frequent polling)
 
-    print(f"Deep research started (ID: {response_id[:20]}...)", file=sys.stderr)
+    # Print the FULL response id (not truncated) so a dropped connection mid-poll
+    # leaves a recoverable id in the log — retrieve later via client.responses.retrieve(id).
+    print(f"Deep research started (response_id: {response_id})", file=sys.stderr)
     print(f"Expected time: ~{int(timeout * 0.7 // 60)} minutes", file=sys.stderr)
 
     while True:
@@ -352,6 +354,56 @@ def research(
             "depth": depth,
             "api": config.get("api", "responses"),
             "response_id": getattr(result["response"], 'id', None),
+        },
+        "metrics": metrics,
+    }
+
+
+def retrieve_research(response_id: str, query: str | None = None, api_key: str | None = None) -> dict:
+    """Retrieve a previously-started background response by id and package it
+    like a normal research() result.
+
+    Recovery path for deep/normal runs whose local poller died (e.g. a dropped
+    connection mid-poll): the response keeps running server-side, so we can fetch
+    it later by its id. If it's still running, this waits for completion.
+    """
+    if api_key is None:
+        api_key = get_api_key()
+
+    timeout = DEPTH_CONFIGS["deep"]["timeout"]
+    client = OpenAI(api_key=api_key, timeout=timeout)
+
+    print(f"Retrieving response {response_id}...", file=sys.stderr)
+    response = client.responses.retrieve(response_id)
+    status = getattr(response, "status", None)
+
+    if status in ("queued", "in_progress"):
+        print(f"Status is '{status}' — waiting for completion...", file=sys.stderr)
+        response = poll_for_completion(client, response_id, timeout)
+    elif status == "failed":
+        error = getattr(response, "error", "Unknown error")
+        raise RuntimeError(f"Response failed: {error}")
+    elif status in ("cancelled", "expired"):
+        raise RuntimeError(f"Response {status}")
+
+    content = extract_content(response)
+    citations = extract_citations(response)
+    usage = getattr(response, "usage", None)
+    metrics = {
+        "input_tokens": getattr(usage, "input_tokens", None) if usage else None,
+        "output_tokens": getattr(usage, "output_tokens", None) if usage else None,
+        "total_tokens": getattr(usage, "total_tokens", None) if usage else None,
+        "tool_calls": count_tool_calls(response),
+    }
+
+    return {
+        "content": content,
+        "citations": citations,
+        "metadata": {
+            "model": getattr(response, "model", "unknown"),
+            "depth": "recovered",
+            "api": "responses",
+            "response_id": getattr(response, "id", response_id),
         },
         "metrics": metrics,
     }
@@ -516,7 +568,20 @@ Examples:
 
     parser.add_argument(
         "query",
-        help="The research question or topic",
+        nargs="?",
+        default=None,
+        help="The research question or topic (optional when --retrieve is used)",
+    )
+
+    parser.add_argument(
+        "-r", "--retrieve",
+        metavar="RESPONSE_ID",
+        help=(
+            "Retrieve and save a previously-started background response by id. "
+            "Recovers a deep run whose local poller died (the response keeps running "
+            "server-side). Optionally pass the original query as the positional arg "
+            "for a better filename/title."
+        ),
     )
 
     parser.add_argument(
@@ -535,10 +600,17 @@ Examples:
     args = parser.parse_args()
 
     try:
-        result = research(
-            query=args.query,
-            depth=args.depth,
-        )
+        if args.retrieve:
+            result = retrieve_research(args.retrieve, query=args.query)
+            save_query = args.query or f"[Recovered background response {args.retrieve}]"
+        else:
+            if not args.query:
+                parser.error("query is required unless --retrieve is given")
+            result = research(
+                query=args.query,
+                depth=args.depth,
+            )
+            save_query = args.query
 
         output = format_output(result)
         print(output)
@@ -547,8 +619,8 @@ Examples:
         if not args.no_save:
             try:
                 api_key = get_api_key()
-                title = generate_title(args.query, api_key)
-                saved_path = save_result(args.query, result, output, title=title)
+                title = generate_title(save_query, api_key) if args.query else None
+                saved_path = save_result(save_query, result, output, title=title)
                 print(f"\nSaved to: {saved_path}", file=sys.stderr)
             except Exception as e:
                 print(f"Warning: Could not save result: {e}", file=sys.stderr)

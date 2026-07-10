@@ -111,6 +111,18 @@ Note: the unversioned `gpt-5` slug is **pinned** to its Aug 2025 snapshot — it
 > - **Fast:** Set `timeout: 300000` (5 min) or use `run_in_background: true`
 > - **Normal / Deep:** Use `run_in_background: true`
 >
+> **CRITICAL — Long prompts or prompts with attached documents:** Bash heredocs break on single quotes, backticks, and other shell-significant characters common in real documents. When the prompt exceeds ~30 lines or includes pasted document content, write it to a temp file via Python first, then pass via `$(cat ...)`:
+> ```bash
+> python3 -c "
+> import pathlib
+> doc = pathlib.Path(r'C:\path\to\document.md').read_text(encoding='utf-8')
+> query = 'Your research question here...\n\n---\n\n' + doc
+> pathlib.Path(r'C:\Users\Dimitri\AppData\Local\Temp\prompt.txt').write_text(query, encoding='utf-8')
+> "
+> cd "<skill-directory>" && uv run research.py -d deep "$(cat 'C:\Users\Dimitri\AppData\Local\Temp\prompt.txt')"
+> ```
+> This avoids all quoting issues and lets you attach full documents to the research query.
+>
 > **CRITICAL — Don't invoke from a fork/sub-agent.** Forks reap their child processes on exit, so a `run_in_background: true` bash task launched from inside a fork gets killed when the fork terminates — even if the fork's summary message claims the research is "running in background." Always invoke this skill directly from the main conversation thread; `run_in_background: true` from there already provides out-of-band completion via task notification, with no benefit to wrapping the skill in a fork.
 
 ```bash
@@ -132,7 +144,22 @@ Compare these options and include: (1) compatibility confirmation for Carrier 40
 
 - `--depth` / `-d`: Research depth - `fast`, `normal`, or `deep` (default: `fast`)
 - `--no-save`: Don't save results to `~/research/`
-- `query` (required): The research question or topic
+- `--retrieve` / `-r` `<response_id>`: Recover a previously-started background (deep/normal) response by its id and save it like a normal run. The positional `query` becomes optional here (pass it for a better filename/title).
+- `query` (required unless `--retrieve` is given): The research question or topic
+
+## Recovering a Dropped Deep Run
+
+Deep/normal research runs in OpenAI background mode, so the response keeps generating server-side even if the local poller dies (dropped connection, killed process, machine sleep). The script prints the **full** `response_id` to stderr the moment the run starts (look for `Deep research started (response_id: resp_...)` in the Bash/task output). To recover the result later:
+
+```bash
+# Minimal — recovers and saves to ~/research/
+cd "<skill-directory>" && uv run research.py --retrieve resp_xxxxxxxxxxxx
+
+# Better filename/title — pass the original query as the positional arg
+cd "<skill-directory>" && uv run research.py --retrieve resp_xxxxxxxxxxxx "the original research question"
+```
+
+If the response is still running, `--retrieve` waits for it to finish. Recovered files are tagged `depth: recovered` in the frontmatter.
 
 ## Output
 
