@@ -74,22 +74,23 @@ Default is `high`, which is good for most reviews. Escalate to `xhigh` only when
 
 | Effort | Model | Reasoning | Typical time | Use when |
 |--------|-------|-----------|--------------|----------|
-| `high` | gpt-5.4 | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
-| `xhigh` | gpt-5.5 | xhigh | 5-20 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
+| `high` | gpt-5.6-terra | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
+| `xhigh` | gpt-5.6-sol | xhigh | 5-20 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
 
 ### Model selection
 
-The script uses a **tiered model strategy** based on effort level (as of 2026-06-02):
+The script uses a **tiered model strategy** based on effort level (as of 2026-07-13, GPT-5.6 family GA'd 2026-07-09):
 
-- **`high` (default) → `gpt-5.4`** — the cost-effective daily driver for routine code review, plan validation, and bug hunting. Exactly **2x cheaper per token** than gpt-5.5 (62.50/375 vs 125/750 per 1M input/output credits), translating to roughly 25-33% more messages per 5-hour window on Plus/Team plans. Users hitting rate limits should prefer this tier.
-- **`xhigh` → `gpt-5.5`** — the stronger peak model for hard, ambiguous, or long-horizon tasks. Higher benchmarks (Terminal-Bench 82.7% vs 75.1%, Expert-SWE 73.1% vs 68.5%) but burns quota 2x faster. Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
+- **`high` (default) → `gpt-5.6-terra`** — the balanced tier: GPT-5.5-level performance at roughly half the cost ($2.50/$15 vs $5/$30 per 1M input/output API tokens). A strict upgrade over the old gpt-5.4 daily driver. Users hitting rate limits should prefer this tier.
+- **`xhigh` → `gpt-5.6-sol`** — the new flagship for hard, ambiguous, or long-horizon tasks (Terminal-Bench 2.1: 91.9% in Ultra mode). ~2x terra per token. Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
 
-Override either default via `CODEX_REVIEW_MODEL` env var (applies to all effort levels).
+Override either default via `CODEX_REVIEW_MODEL` env var (applies to all effort levels). `gpt-5.6-luna` (fast/cheap volume tier, $1/$6) is available via the env var if you want a quick low-stakes pass.
 
 Notes:
-- **ChatGPT-account auth** (the typical setup): Codex does NOT support the floating `gpt-5-codex` alias — pass a versioned snapshot. Accepted strings per [Codex docs](https://developers.openai.com/codex/models): `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Note: `gpt-5.3-codex` and `gpt-5.2` were removed from ChatGPT-account auth on 2026-06-02.
-- **API-key auth**: the floating `gpt-5-codex` alias works and auto-updates within the codex line. Set `CODEX_REVIEW_MODEL=gpt-5-codex` if you're on API-key auth.
-- **CLI version matters**: newer models require recent Codex CLI versions. The wrapper surfaces a non-blocking warning encouraging you to upgrade to the latest version when your installed CLI is out of date. Run `wsl npm install -g @openai/codex@latest` to upgrade.
+- **ChatGPT-account auth** (the typical setup): all three GPT-5.6 tiers (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) work under ChatGPT sign-in on Plus/Team/Pro plans — verified 2026-07-13 (Free/Go plans only get terra). Previous-gen `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` remain accepted. The floating `gpt-5-codex` alias is still NOT supported under ChatGPT auth (API-key only). `gpt-5.3-codex` and `gpt-5.2` were removed 2026-06-02.
+- **API-key auth**: the floating `gpt-5-codex` alias still resolves but OpenAI marks it deprecated (as of 2026-07). Prefer `CODEX_REVIEW_MODEL=gpt-5.6-sol` (or `-terra`) on API-key auth.
+- **New reasoning efforts (sol)**: sol supports `max` (extended chain-of-thought) and `ultra` (multi-agent subagent decomposition). The script doesn't use these — it always passes the preset's reasoning effort, so `CODEX_REVIEW_MODEL` alone can't enable them. If a review truly warrants `max`/`ultra`, edit the `EFFORT_PRESETS` dict in `review.py` for that run. `ultra` in particular consumes quota very fast (the CLI itself warns on selection).
+- **CLI version matters**: the GPT-5.6 family requires Codex CLI >= 0.144.0. The wrapper surfaces a non-blocking warning encouraging you to upgrade when your installed CLI is out of date. Run `wsl npm install -g @openai/codex@latest` to upgrade.
 
 ## Writing the Review Prompt
 
@@ -176,7 +177,9 @@ Expect **1-3 actionable items** per review. If you're surfacing more than 4-5 th
 
 Optional. By default, Codex uses whatever account is logged in (`~/.codex/auth.json`). If you have multiple OpenAI accounts (e.g. an agency Team plan and a personal Plus plan), you can save named profiles and switch between them with `-a`.
 
-Profiles are stored as `~/.codex/<name>.auth.json` — alongside the main auth file, no extra directories. The active auth.json is swapped for the duration of the review and restored afterward (even on crash).
+Profiles are stored as `~/.codex/<name>.auth.json` — alongside the main auth file, no extra directories. The active auth.json is swapped for the duration of the review and restored afterward (on normal completion and Python exceptions; a hard kill mid-review can leave the swapped profile active).
+
+> **Do not run concurrent reviews with `-a`.** The swap uses a single global `auth.json` with no locking — two overlapping profile-switched reviews can restore the wrong login or cross-contaminate token refreshes. Concurrent reviews on the *default* account (no `-a`) are fine.
 
 ### One-time setup
 

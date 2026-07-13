@@ -29,27 +29,28 @@ from pathlib import Path, PureWindowsPath
 
 REVIEWS_DIR = Path.home() / "reviews"
 
-# Codex CLI model selection notes (as of 2026-06-02):
+# Codex CLI model selection notes (as of 2026-07-13):
+# - GPT-5.6 family went GA 2026-07-09: gpt-5.6-sol (flagship), gpt-5.6-terra
+#   (balanced, ~GPT-5.5 performance at ~half the cost), gpt-5.6-luna (fast/
+#   cheap volume tier). All three work under ChatGPT-account auth; requires
+#   Codex CLI >= 0.144.0. gpt-5.5 / gpt-5.4 remain available as previous-gen.
 # - Under ChatGPT-account auth, Codex does NOT support the floating gpt-5-codex
 #   alias (API-key auth only). ChatGPT users must pass a versioned snapshot.
-# - Allowed strings per developers.openai.com/codex/models: gpt-5.5, gpt-5.4,
-#   gpt-5.4-mini (and Pro-only gpt-5.3-codex-spark).
-# - REMOVED 2026-06-02: gpt-5.3-codex, gpt-5.2 — OpenAI dropped these from
-#   ChatGPT-account auth server-side. See github.com/openai/codex/issues/25808.
-# - Tiered model strategy (2026-06-02): gpt-5.4 for routine work (high),
-#   gpt-5.5 for hard/ambiguous tasks (xhigh). 5.4 is more cost-effective on
-#   Plus/Team credits and sufficient for most code review. 5.5 is the stronger
-#   peak model but burns quota faster. Users hitting rate limits should try 5.4.
+# - Tiered model strategy (2026-07-13): gpt-5.6-terra for routine work (high) —
+#   GPT-5.5-level review quality at roughly the old gpt-5.4 cost. gpt-5.6-sol
+#   for hard/ambiguous tasks (xhigh) — the new peak model, ~2x terra per token.
+#   Sol also supports "max" and "ultra" reasoning efforts; ultra spawns
+#   subagents and burns quota very fast — not used by default here.
 # - Override at runtime via CODEX_REVIEW_MODEL (applies to all effort levels).
 EFFORT_PRESETS = {
-    "high":  {"model": "gpt-5.4", "reasoning": "high"},
-    "xhigh": {"model": "gpt-5.5", "reasoning": "xhigh"},
+    "high":  {"model": "gpt-5.6-terra", "reasoning": "high"},
+    "xhigh": {"model": "gpt-5.6-sol", "reasoning": "xhigh"},
 }
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
 # when the user's local CLI is significantly behind. Bump this periodically.
-LAST_KNOWN_CODEX_CLI = (0, 136, 0)
-LAST_KNOWN_CODEX_CLI_DATE = "2026-06-02"
+LAST_KNOWN_CODEX_CLI = (0, 144, 3)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-07-13"
 
 
 def win_to_wsl(path: str) -> str:
@@ -70,7 +71,7 @@ def slugify(text: str, max_len: int = 50) -> str:
 def check_codex_version() -> None:
     """Print Codex CLI version. Warn (non-blocking) if significantly behind.
 
-    Newer models (e.g. gpt-5.5) require recent CLI versions; surfacing a stale
+    Newer models (e.g. the gpt-5.6 family) require recent CLI versions; surfacing a stale
     install proactively saves a confusing "requires a newer version of Codex"
     error round-trip.
     """
@@ -92,7 +93,7 @@ def check_codex_version() -> None:
             print(
                 f"  ⚠️  Your Codex CLI ({local}) is out of date — last known "
                 f"latest is {latest} (checked {LAST_KNOWN_CODEX_CLI_DATE}). "
-                f"Newer models (e.g. gpt-5.5) may be rejected.\n"
+                f"Newer models (e.g. the gpt-5.6 family) may be rejected.\n"
                 f"     We recommend upgrading: "
                 f"wsl npm install -g @openai/codex@latest",
                 file=sys.stderr,
@@ -228,7 +229,9 @@ def run_codex(prompt: str, workdir: str | None = None,
     preset = EFFORT_PRESETS[effort]
     model = resolve_model(effort)
     reasoning = preset["reasoning"]
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Include PID so concurrent reviews launched in the same second don't
+    # share (and clobber) each other's prompt/output files.
+    ts = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
     output_file = f"/tmp/codex_review_{ts}.md"
     prompt_file = f"/tmp/codex_prompt_{ts}.txt"
 
