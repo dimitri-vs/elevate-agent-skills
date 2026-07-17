@@ -103,6 +103,28 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 Note: the unversioned `gpt-5` slug is **pinned** to its Aug 2025 snapshot — it does not auto-float to newer minors. Update the default (or set the env var) when a new frontier ships.
 
+## Costs
+
+Approximate per-run costs with the default models (measured July 2026 against actual OpenAI billing):
+
+| Depth | Typical cost/run | What drives it |
+|-------|-----------------|----------------|
+| **fast** | ~$0.50–0.70 | Large input context (web results, ~70–80k tokens/run) + separately-billed web search tool calls (~13 calls/run at $10/1k) |
+| **normal** | ~$1.50 | Reasoning tokens bill as output at the deep-research model's output rate |
+| **deep** | ~$2.50–3.00 | Same as normal, roughly 2x the tokens and searches |
+
+Two non-obvious cost dynamics: for the deep-research tiers, **output (including reasoning) is roughly half of total tokens** and bills at 4x the input rate, so output dominates the cost. For the fast tier, tokens are cheap but the web search results stuffed into context make input volume large, and **web search tool calls bill separately** from tokens (they appear as their own line item on the invoice).
+
+### Recalculating
+
+Costs drift as models and pricing change. To re-derive them:
+
+1. **Rough pass (no API needed):** every saved report in `~/research/` has `tokens`, `depth`, and `web_searches` in its frontmatter. Grep these out and average per depth to get token volume per run.
+2. **Accurate pass (requires an org admin key):** query `GET /v1/organization/usage/completions` with `group_by: ["api_key_id", "model"]` to get the real input/cached/output token split for the key this skill uses, then multiply by current rates from the [pricing page](https://platform.openai.com/docs/pricing). Reasoning tokens are included in `output_tokens`.
+3. **Reconcile against billing:** query `GET /v1/organization/costs` with `group_by: ["line_item"]` — this returns actual billed dollars per model and surfaces separately-billed items like `web search tool calls` that token math alone misses. The two passes should agree within a few percent.
+
+Using a **dedicated API key** for this skill makes step 2 trivial — per-key attribution via the usage endpoint requires no guesswork about which requests were research runs. (The costs endpoint only groups down to project level, so a dedicated project additionally gives clean invoice-level reads.)
+
 ## Usage
 
 **Important (Windows):** Always quote paths containing backslashes or spaces.
