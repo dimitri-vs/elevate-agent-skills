@@ -6,6 +6,8 @@ A CLI tool to sync skills from a central repository to multiple projects.
 Supports both .claude/skills/ and .codex/skills/ target directories.
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
