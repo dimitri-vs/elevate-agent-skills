@@ -47,6 +47,24 @@ humanize --open --context "reply in an existing email thread" <<'EOF' ... EOF
 
 If you genuinely can't tell, default to describing it as a reply in an ongoing thread — that's the common case and the safer assumption (no greeting).
 
+## Author pass (do this BEFORE calling the CLI)
+
+The CLI is an editor: it fixes style but cannot know what you know. Detector A/B testing (2026-07, Pangram 3.3.2) showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" — author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
+
+1. **Draft 20% shorter than feels complete.** Cut by deleting the weakest supporting point entirely, not by compressing every sentence — uniform density is itself an LLM signature. Complete evidence coverage reads as AI; humans leave weaker points unstated or save them for a natural follow-up message.
+2. **Ground it in the real situation.** Weave in 1-2 concrete facts from the actual session or thread: the delay being apologized for, what actually happened while testing ("the benchmark nearly crashed my machine"), the specific device or project name ("my Legion 5", not "my machine"). Only facts actually observed in the session, user memory, or the thread — never invented color.
+3. **Label epistemic status honestly.** You know which claims were verified this session and which are inference. State verified things flatly; where the draft is genuinely guessing, say so in plain words ("but this is pure speculation", "could be wrong here"). Uniform confidence across every claim is the deepest AI tell; honest unevenness is free because it's true.
+4. **Commit, don't offer menus.** "I'll attach the benchmark script" beats "Happy to send the script, screenshots, or traces if useful." Pick the one thing that will actually happen.
+
+## Structural check (AFTER the CLI returns)
+
+Read the output file once before reporting the path. Two things the LLM pass under-delivers:
+
+- **Block uniformity:** if every paragraph landed at the same 2-3 sentence shape, make one manual edit — merge two paragraphs, or break one after its first sentence. Plain file edit, no API call.
+- **Over-repaired looseness:** if the draft had a loose construction the rewrite tidied away (a dangling clause, an abrupt topic graft, a mid-sentence "..."), consider restoring it. Looseness is texture, not error.
+
+For high-stakes public posts (HN, Reddit, LinkedIn), still surface the result for Dimitri's own quick pass. The agent's texture is sampled from Claude's distribution; his is not, and that difference is what detectors measure.
+
 ### Iterating on an opened result
 
 The printed path is a normal file you can edit:
@@ -118,6 +136,8 @@ The heuristic pass adds surface-level "rushed typing" signals: occasional misspe
 
 **Default behavior is `light`:** conservative probabilities, at most one transform per category. Appropriate for most content (social posts, emails, proposals). The reader shouldn't consciously notice the texture.
 
+This deliberately includes formal and quasi-legal correspondence (escalations, warranty disputes, client emails): small typos and split compounds are expected in real human email and are part of the disguise. Do not reach for `--no-heuristic` just because the content is high-stakes; reserve it for cases where the *user* asks for a verbatim-clean pass.
+
 - `light` (default): conservative probabilities, at most one transform per category.
 - `heavy` (casual): aggressive probabilities, multiple transforms. For Slack DMs, SMS, quick replies.
 - `none` / off: skip the heuristic pass entirely. Unconditional cleanup still runs.
@@ -169,6 +189,28 @@ Rule of thumb: if making the text *shorter and barer* would lose information the
 ## Personal substitutions (guaranteed)
 
 Some conventions are mechanical and must always hold, so they're enforced deterministically (not via the prompt) in `~/.config/humanize/substitutions.py` — a `SUBSTITUTIONS = [(regex, replacement), ...]` list applied as the final step every run. Currently: `e.g.`→`eg.`, `i.e.`→`ie.`, and commas pushed outside quotes (`"like this",`). Universal non-typable Unicode (em-dashes, arrows `→`→`>`, ellipsis) is stripped always, regardless of this file. Edit that file to add conventions; no need to touch the prompt or this skill.
+
+## Corpus flywheel (style distillation from manual edits)
+
+Every `--open` run automatically archives three files to `~/.config/humanize/corpus/`, keyed to the temp file's stem (e.g. `humanize-20260722-083219`):
+
+- `<stem>-input.md` — the pre-humanize draft
+- `<stem>-tool.md` — what the tool produced
+- `<stem>-meta.json` — run parameters (context, model, heuristic level)
+
+Dimitri edits the opened temp file in place (Notepad++/Typora) and saves over it. When the 24h sweep later deletes that temp file, it first compares it against the archived `-tool.md`; if they differ, the edited version is saved as `<stem>-final.md`. A tool/final pair is a recorded example of his real editing function. Pass `--no-corpus` to skip archiving a sensitive run.
+
+**The one habit that makes this work: save edits over the same opened file.** Remind Dimitri of this if he mentions tweaking a humanized draft somewhere else.
+
+### Distillation procedure
+
+When Dimitri asks to "distill the humanize corpus" (or during a periodic tune-up, roughly monthly):
+
+1. List stems in `~/.config/humanize/corpus/` that have a `-final.md`.
+2. For each pair, diff `-tool.md` against `-final.md`, using `-meta.json` for register context.
+3. Cluster the recurring edit types across pairs (phrases he consistently cuts, constructions he adds, length deltas, punctuation habits). One-off content edits are noise; only patterns that appear across multiple pairs are signal.
+4. Propose concrete additions or amendments to `~/.config/humanize/style.md`, showing the evidence pairs for each. Apply on his approval.
+5. Move processed trios into `~/.config/humanize/corpus/distilled/` so the next distillation only sees fresh pairs.
 
 ## Temp-file pattern
 
