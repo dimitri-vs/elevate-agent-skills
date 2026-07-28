@@ -1,0 +1,2 @@
+# Per-install secrets — never copied from source; target's copy is preserved
+.env

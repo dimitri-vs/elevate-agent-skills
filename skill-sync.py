@@ -350,6 +350,13 @@ def cmd_sync(args) -> int:
                     manifest_changed = True
             else:
                 skipped += 1
+                # Re-baseline: already in sync but the stored hash is stale
+                # (target edits back-ported to source by hand, or the hash
+                # algorithm changed). Record the current hash so the next
+                # source edit reads as target_behind, not a false conflict.
+                if state["in_sync"] and not args.dry_run and last_synced_hash != state["source_hash"]:
+                    manifest["installations"][skill_name][target_base]["last_synced_hash"] = state["source_hash"]
+                    manifest_changed = True
 
     # Save manifest if we updated any hashes
     if manifest_changed:

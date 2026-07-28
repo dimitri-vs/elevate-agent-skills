@@ -47,6 +47,15 @@ uv run speak.py --ntfy <<'EOF' ... EOF
 
 The topic comes from `NTFY_TOPIC` in the environment or `~/.env`. If unset, pass `--ntfy-topic <topic>`.
 
+**Size limit (hit 2026-07-23):** ntfy.sh rejects large attachments with `HTTP Error 413: Request Entity Too Large`. The default TTS bitrate produces roughly 800 KB per minute, so anything past ~2.5 minutes fails. The script does not yet re-encode, so for longer audio generate the mp3 locally first (`--out <path> --no-open`), shrink it, then publish by hand:
+
+```bash
+ffmpeg -y -i in.mp3 -b:a 32k -ac 1 -ar 24000 out.mp3 -loglevel error   # ~4x smaller, speech quality fine
+curl -s -T out.mp3 -H "Title: ..." -H "Filename: out.mp3" "https://ntfy.sh/$TOPIC"
+```
+
+Also note ntfy attachments **expire after ~3 hours** — tell the user to listen soon, and that the local mp3 in the temp dir stays for 24h.
+
 ## Flags
 
 | Flag | Default | Purpose |

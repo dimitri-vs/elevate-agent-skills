@@ -7,6 +7,10 @@ description: Design, create, and maintain Claude Code Desktop routines (local sc
 
 Guide for creating and maintaining Claude Code Desktop routines - local scheduled tasks that run on the user's machine at cron intervals.
 
+Full reference docs (read only when this skill doesn't answer the question - e.g. cloud vs local mode tradeoffs, storage/backup internals, MSIX path quirks):
+- `C:\Users\Dimitri\Obsidian Vault\Agency Management\Claude Code Playbook\Scheduling - CLI, Desktop, Cloud.md` - Cloud Routine vs Desktop local vs `/loop` decision guide, catch-up behavior details
+- `C:\Users\Dimitri\Obsidian Vault\Agency Management\Claude Code Playbook\Where Claude Stores Things - Chat, Cowork, Code.md` - where prompts/schedules/skills live on disk across Chat/Cowork/Code, backup advice
+
 ## When to Use
 
 - Building a new routine from scratch
@@ -103,6 +107,17 @@ description: What this routine monitors/does, how often, and what it delivers.
 
 Routines are scheduled via the Desktop app's Routines page.
 
+**Deployment order matters (verified 2026-07-25):** creating a routine in the Routines UI **overwrites** any pre-staged `~/.claude/scheduled-tasks/<id>/SKILL.md` with whatever placeholder prompt was typed in the dialog. Correct order: (1) user creates the routine in the UI (placeholder prompt is fine), (2) THEN copy the real SKILL.md from the repo mirror over the placeholder. The routine `id` in scheduled-tasks.json = the folder name.
+
+**Verify after creation:** the schedule the user picks in the UI often doesn't match intent (observed: "Fri 8:30am" intent saved as `0 9 * * 1-5`). Reading `scheduled-tasks.json` while the app runs is safe (only writes are clobbered) — confirm the entry:
+
+```json
+{"scheduledTasks": [{"id": "<name>", "cronExpression": "30 8 * * 5", "enabled": true,
+  "filePath": "...\\scheduled-tasks\\<name>\\SKILL.md", "cwd": "...", "useWorktree": false}]}
+```
+
+Permission mode is NOT stored in this file — verify "Act without asking" in the UI itself.
+
 **Setting the schedule:** Use the "Custom" option in the schedule dropdown to enter a raw cron expression. Standard 5-field cron in local time: `minute hour day-of-month month day-of-week`.
 
 Common patterns:
@@ -187,7 +202,9 @@ Every routine should get a periodic review. Check:
 - **Google News time_period param:** SearchAPI.io's `google_news` engine uses `tbs` for time filtering (same as regular Google), not `time_period`.
 - **Overly broad search queries for promo/opportunity scanning:** Broad queries like "Windows speech to text" match anything with those common words. Scope to relevant subreddits AND require intent signals (help, recommend, alternative, looking for).
 - **Not saving full LLM responses:** When probing LLMs for brand mentions, save the complete response text - truncating to excerpts makes false positives unauditable.
-- **Desktop rewrites scheduled-tasks.json on exit:** If you need to hand-edit this file, quit the Desktop app first. But prefer using the Desktop UI's "Custom" cron option instead.
+- **Desktop rewrites scheduled-tasks.json on exit:** If you need to hand-edit this file, quit the Desktop app first (verified working 2026-07-27: quit → edit `cronExpression` → relaunch; the app reads the file at startup). Reading while the app runs is safe. Prefer the Desktop UI's "Custom" cron option when the user is driving.
+- **Routines UI creation clobbers pre-staged SKILL.md:** Write the live prompt AFTER the user creates the routine in the UI, not before (see Schedule Configuration).
+- **`claude.exe` is ambiguous in process checks:** CLI sessions are also `claude.exe` (`~\.local\bin\claude.exe`). "Is the Desktop app running?" must filter by executable path, not image name — a `tasklist`-by-name watcher will wait forever while CLI sessions are open.
 
 ## Migration Checklist (from ChatGPT / other platform)
 
@@ -199,6 +216,6 @@ When migrating a scheduled task from another platform:
 4. **Design the two layers** - split mechanical collection from editorial judgment
 5. **Set up the project** - create `Code/<name>/`, write config.py, main script, template
 6. **Write the SKILL.md** - follow the structure above
-7. **Deploy** - copy SKILL.md to `~/.claude/scheduled-tasks/<name>/`, configure schedule in Desktop
+7. **Deploy** - user creates the routine in the Desktop Routines UI first (placeholder prompt), THEN copy the real SKILL.md over `~/.claude/scheduled-tasks/<name>/SKILL.md`, then verify cron/cwd in scheduled-tasks.json (read-only is safe)
 8. **Test** - trigger a manual run, review the output, fix issues
 9. **Iterate** - tune queries, tighten triage rules, adjust schedule based on first few runs
