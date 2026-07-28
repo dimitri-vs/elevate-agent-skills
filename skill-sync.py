@@ -126,6 +126,10 @@ def hash_directory(path: Path, exclude: set[str] | None = None) -> str:
     for file_path in sorted(path.rglob("*")):
         if file_path.is_file():
             rel_path = file_path.relative_to(path)
+            # Skip Python bytecode caches: regenerated whenever the skill runs
+            # at a target, which caused spurious CONFLICT states.
+            if "__pycache__" in rel_path.parts or rel_path.suffix == ".pyc":
+                continue
             if str(rel_path) in exclude or rel_path.name in exclude:
                 continue
             hasher.update(str(rel_path).encode())
@@ -262,13 +266,15 @@ def copy_skill(source: Path, target: Path, state: dict, force: bool = False, dry
     if target.exists():
         shutil.rmtree(target)
 
-    # Copy the skill (excluding nosync entries from source — target's version is authoritative)
-    def _ignore_nosync(directory, contents):
+    # Copy the skill (excluding nosync entries from source — target's version is
+    # authoritative — and bytecode caches, which are excluded from hashing too)
+    def _ignore_on_copy(directory, contents):
         rel = Path(directory).relative_to(source)
+        ignored = [c for c in contents if c == "__pycache__" or c.endswith(".pyc")]
         if rel == Path("."):
-            return [c for c in contents if c in nosync]
-        return []
-    shutil.copytree(source, target, ignore=_ignore_nosync if nosync else None)
+            ignored += [c for c in contents if c in nosync]
+        return ignored
+    shutil.copytree(source, target, ignore=_ignore_on_copy)
 
     # Restore preserved files and directories
     for name, data in preserved_files.items():

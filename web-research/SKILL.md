@@ -1,6 +1,6 @@
 ---
 name: web-research
-description: Perform web research using OpenAI APIs. Fast mode uses gpt-5.5 with web_search and medium reasoning for quick lookups (~1-2 min). Normal/deep modes use o3-deep-research model for comprehensive multi-step research with code interpreter. Invoke when user needs current web information or thorough research on a topic.
+description: Perform web research using OpenAI APIs. Fast mode uses gpt-5.5 with web_search and medium reasoning for quick lookups (~1-2 min). Normal/deep modes use gpt-5.6-sol with web_search + code interpreter at high/xhigh reasoning effort for comprehensive multi-step research. Invoke when user needs current web information or thorough research on a topic.
 ---
 
 # Web Research Skill
@@ -41,7 +41,7 @@ Uses gpt-5.5 via the Responses API with `web_search` tool and medium reasoning e
 - "I'm trying to price a used 6-foot Green Giant Arborvitae for a local sale. What do established arborvitae this size typically sell for secondhand vs. retail nursery pricing? Looking for Craigslist, eBay, and garden forum comps."
 - "When is the next Apple event scheduled for 2026? I'm deciding whether to wait for a new MacBook announcement or buy now."
 
-### Normal (2-6 min) — Moderate Research
+### Normal (3-8 min) — Moderate Research
 
 Use when you need more than a quick lookup but don't need exhaustive coverage. Good for comparisons, how-to questions, and understanding a topic at a moderate depth.
 
@@ -56,7 +56,7 @@ Use when you need more than a quick lookup but don't need exhaustive coverage. G
 - "Compare Tailwind CSS vs vanilla CSS for a small project"
 - "How do I set up GitHub Actions for a Python project?"
 
-### Deep (6-14 min) — Exploratory Research
+### Deep (5-15 min) — Exploratory Research
 
 Use when you're genuinely exploring—you don't have certainty, the topic is niche, or you need the model to follow leads and check multiple sources. Also use when your research might require data analysis (reading PDFs, spreadsheets, doing calculations).
 
@@ -85,35 +85,35 @@ Unlike ChatGPT's Deep Research (which asks clarifying questions), the API expect
 
 ## Configuration
 
-| Depth | Model | Time | Max Tool Calls |
-|-------|-------|------|----------------|
-| **fast** | gpt-5.5 + web_search | ~1-2 min | — |
-| **normal** | o3-deep-research | 2-6 min | 25 |
-| **deep** | o3-deep-research | 6-14 min | unlimited |
+| Depth | Model | Reasoning | Time | Max Tool Calls |
+|-------|-------|-----------|------|----------------|
+| **fast** | gpt-5.5 + web_search | medium | ~1-2 min | — |
+| **normal** | gpt-5.6-sol + web_search + code interpreter | high | 3-8 min | 25 |
+| **deep** | gpt-5.6-sol + web_search + code interpreter | xhigh | 5-15 min | unlimited |
 
-**Note:** `o4-mini-deep-research` is available as a faster/cheaper alternative to o3, but produces lower quality output.
+**Note (July 2026 migration):** OpenAI retired the dedicated deep-research models (`o3-deep-research`, `o4-mini-deep-research`) on 2026-07-23. "Deep research" is now a *method* — a reasoning model with the `web_search` tool in background mode — not a model ID. The deprecations page names `gpt-5.6-sol` as the substitute; this skill differentiates normal vs deep via reasoning effort (`high` vs `xhigh`, both verified available) and tool-call caps. A 2026-07-28 side-by-side test on a medium query: high = 4:11 / 12 searches / 11.6k output tokens; xhigh = 5:07 / 12 searches / 16.5k output tokens — comparable searches and wall-clock to old o3, with xhigh producing ~40% more reasoning/output.
 
 **Override defaults via env vars** (frontier moves; bumping a model means changing one line in your shell, not editing code):
 
 | Env var | Default | Applies to |
 |---------|---------|------------|
 | `WEB_RESEARCH_FAST_MODEL` | `gpt-5.5` | fast tier |
-| `WEB_RESEARCH_DEEP_MODEL` | `o3-deep-research` | normal + deep tiers |
+| `WEB_RESEARCH_DEEP_MODEL` | `gpt-5.6-sol` | normal + deep tiers |
 | `WEB_RESEARCH_TITLE_MODEL` | `gpt-5.4-nano` | title-generator helper |
 
-Note: the unversioned `gpt-5` slug is **pinned** to its Aug 2025 snapshot — it does not auto-float to newer minors. Update the default (or set the env var) when a new frontier ships.
+Note: versioned slugs are **pinned** — they do not auto-float to newer minors. Update the default (or set the env var) when a new frontier ships.
 
 ## Costs
 
-Approximate per-run costs with the default models (measured July 2026 against actual OpenAI billing):
+Approximate per-run costs with the default models (fast measured against July 2026 billing; normal/deep computed 2026-07-28 from observed token volumes × confirmed rates — gpt-5.6-sol: $5/M input, $30/M output, $10/1k web searches):
 
 | Depth | Typical cost/run | What drives it |
 |-------|-----------------|----------------|
 | **fast** | ~$0.50–0.70 | Large input context (web results, ~70–80k tokens/run) + separately-billed web search tool calls (~13 calls/run at $10/1k) |
-| **normal** | ~$1.50 | Reasoning tokens bill as output at the deep-research model's output rate |
-| **deep** | ~$2.50–3.00 | Same as normal, roughly 2x the tokens and searches |
+| **normal** | ~$0.80–1.20 | ~80–115k input + ~12k output tokens + 8–12 searches observed per run on gpt-5.6-sol |
+| **deep** | ~$1.20–2.50 | ~106k input + ~17k output on a medium query (~$1.15); complex queries scale searches and tokens up |
 
-Two non-obvious cost dynamics: for the deep-research tiers, **output (including reasoning) is roughly half of total tokens** and bills at 4x the input rate, so output dominates the cost. For the fast tier, tokens are cheap but the web search results stuffed into context make input volume large, and **web search tool calls bill separately** from tokens (they appear as their own line item on the invoice).
+The cost *shape* changed with the 2026-07-23 migration from o3-deep-research to gpt-5.6-sol: o3 was output-dominated (~24k input/run), while gpt-5.6-sol with the current `web_search` tool is **input-dominated like the fast tier** (~80–115k input tokens/run, because full search results are fed into context at the model's input rate). Reasoning tokens still bill as output (`usage.output_tokens` includes them). **Web search tool calls bill separately** from tokens on all tiers (they appear as their own line item on the invoice). Notably, the migration made the deep tiers *cheaper* than o3-era measurements (~$1.50 normal / ~$2.50–3.00 deep) despite the input bloat, because sol's output rate is far below o3-deep-research's. Reconcile against real billing after a few weeks of use (see Recalculating below).
 
 ### Recalculating
 

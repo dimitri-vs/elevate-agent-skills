@@ -10,11 +10,13 @@
 Web Research CLI using OpenAI APIs.
 
 Supports three depth levels:
-- fast: gpt-5 with web_search + low reasoning (~1-2 min) - quick lookups, current facts
-- normal: o3-deep-research with code interpreter (2-6 min) - thorough analysis
-- deep: o3-deep-research with code interpreter (6-14 min) - comprehensive research
+- fast: gpt-5.5 with web_search + medium reasoning (~1-2 min) - quick lookups, current facts
+- normal: gpt-5.6-sol with web_search + code interpreter, high reasoning (3-8 min) - thorough analysis
+- deep: gpt-5.6-sol with web_search + code interpreter, xhigh reasoning (5-15 min) - comprehensive research
 
-Alternative: o4-mini-deep-research is faster/cheaper but lower quality than o3.
+Note: The dedicated deep-research models (o3-deep-research, o4-mini-deep-research)
+were retired 2026-07-23. "Deep research" is now a method: reasoning model +
+web_search tool + background mode + high/xhigh reasoning effort.
 
 Usage:
     uv run research.py "short question here"
@@ -65,29 +67,32 @@ def log_research(depth: str, query: str, metrics: dict, success: bool = True):
 
 
 # Depth configurations
-# - fast: gpt-5 via Responses API with web_search tool + reasoning (low effort)
-# - normal/deep: o3-deep-research model (true deep research)
-#   Alternative: o4-mini-deep-research is faster/cheaper but lower quality
+# - fast: gpt-5.5 via Responses API with web_search tool + reasoning (medium effort)
+# - normal/deep: gpt-5.6-sol with web_search + code_interpreter in background mode.
+#   The dedicated deep-research models were retired 2026-07-23; the deprecations
+#   page names gpt-5.6-sol as the substitute, differentiated here by reasoning
+#   effort (normal: high, deep: xhigh) and max_tool_calls (normal: 25, deep: uncapped).
 #
 # Note: max_tool_calls is the primary way to control cost and latency for deep
 # research (not max_output_tokens).
 #
-# Profiling results (2026-02-02, no limiters):
+# Migration test (2026-07-28, medium-complexity query, no tool-call cap):
 # ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ o3-deep-research (normal/deep)                                              │
-# ├────────────┬──────────┬─────────────┬──────────────┬─────────┬─────────────┤
-# │ Complexity │ Duration │ Input Tok   │ Output Tok   │ Searches│ Content     │
-# ├────────────┼──────────┼─────────────┼──────────────┼─────────┼─────────────┤
-# │ Simple     │ 1:54     │ 8,512       │ 6,546        │ 5       │ 301ch       │
-# │ Medium     │ 3:14     │ 23,719      │ 14,926       │ 13      │ 27.6Kch     │
-# │ Complex    │ 6:55     │ 41,717      │ 25,362       │ 36      │ 23.2Kch     │
-# └────────────┴──────────┴─────────────┴──────────────┴─────────┴─────────────┘
-# gpt-5 + web_search (fast): ~1-2 min with low reasoning effort. Not yet profiled.
+# │ gpt-5.6-sol vs retired o3-deep-research (same query class)                  │
+# ├──────────────┬──────────┬─────────────┬──────────────┬─────────┬───────────┤
+# │ Config       │ Duration │ Input Tok   │ Output Tok   │ Searches│ Content   │
+# ├──────────────┼──────────┼─────────────┼──────────────┼─────────┼───────────┤
+# │ sol + high   │ 4:11     │ 115,256     │ 11,580       │ 12      │ 19.2Kch   │
+# │ sol + xhigh  │ 5:07     │ 105,799     │ 16,528       │ 12      │ 22.9Kch   │
+# │ o3 (Medium)  │ 3:14     │ 23,719      │ 14,926       │ 13      │ 27.6Kch   │
+# └──────────────┴──────────┴─────────────┴──────────────┴─────────┴───────────┘
+# Input volume is ~5x o3 because the current web_search tool feeds full page
+# results into context (same dynamic as the fast tier).
 DEPTH_CONFIGS = {
     "fast": {
-        # gpt-5 is pinned to the Aug 2025 snapshot (does NOT auto-float).
-        # Bump default when a new frontier ships, or override via WEB_RESEARCH_FAST_MODEL.
-        # Current best as of 2026-04-25: gpt-5.5
+        # Versioned slugs are pinned (do NOT auto-float). Bump default when a
+        # new frontier ships, or override via WEB_RESEARCH_FAST_MODEL.
+        # gpt-5.5 kept deliberately post-migration (2026-07-28): not deprecated.
         "model": "gpt-5.5",
         "api": "responses",
         "tools": [{"type": "web_search"}],
@@ -96,26 +101,27 @@ DEPTH_CONFIGS = {
         "timeout": 300,  # 5 minutes
     },
     "normal": {
-        # No GPT-5-based deep-research API model exists yet (as of 2026-04-25).
-        # Override via WEB_RESEARCH_DEEP_MODEL when one ships.
-        "model": "o3-deep-research",
+        # Override via WEB_RESEARCH_DEEP_MODEL (applies to normal + deep).
+        "model": "gpt-5.6-sol",
         "api": "responses",
         "tools": [
             {"type": "web_search"},
             {"type": "code_interpreter", "container": {"type": "auto"}},
         ],
+        "reasoning": {"effort": "high"},
         "max_output_tokens": 50000,
         "max_tool_calls": 25,
         "timeout": 900,  # 15 minutes
         "background": True,
     },
     "deep": {
-        "model": "o3-deep-research",
+        "model": "gpt-5.6-sol",
         "api": "responses",
         "tools": [
             {"type": "web_search"},
             {"type": "code_interpreter", "container": {"type": "auto"}},
         ],
+        "reasoning": {"effort": "xhigh"},
         "max_output_tokens": 100000,
         # No max_tool_calls limit - let it run fully
         "timeout": 1800,  # 30 minutes
@@ -535,15 +541,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Depth levels:
-  fast    gpt-5 with web_search + reasoning (~1-2 min)
+  fast    gpt-5.5 with web_search + reasoning (~1-2 min)
           Quick lookups, current facts with reasoning-informed synthesis
           Input: A couple sentences with background context
 
-  normal  o3-deep-research with code interpreter (2-6 min)
+  normal  gpt-5.6-sol + web_search + code interpreter, high reasoning (3-8 min)
           Thorough analysis, multi-step research
           Input: ~1 paragraph of context + question
 
-  deep    o3-deep-research with code interpreter (6-14 min)
+  deep    gpt-5.6-sol + web_search + code interpreter, xhigh reasoning (5-15 min)
           Comprehensive research, maximum output, complex topics
           Input: ~2+ paragraphs of detailed context + question
 
