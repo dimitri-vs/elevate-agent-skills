@@ -54,6 +54,8 @@ python skill-sync.py discover "/path/to/projects"
 
 The `local/` directory is gitignored and holds skills with personal or proprietary content. `skill-sync.py` scans both root and `local/` automatically — local skills show a `[local]` tag in `list` output and sync identically to public ones.
 
+`local/` may contain its own nested git repo (invisible to this repo) for private version history. If `local/.git` exists, commit it whenever you edit a local skill or back-port live edits into one — same "commit both repos" habit as the Workflow above.
+
 ## Syncing Safely
 
 **Never run `sync --force` without user confirmation.** The `--force` flag overwrites local edits at target locations, and those targets (e.g., `~/.claude/skills/`, Obsidian Vault) are typically not git repos — there's no version history to recover from.
