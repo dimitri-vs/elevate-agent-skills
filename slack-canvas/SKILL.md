@@ -111,14 +111,15 @@ replaces.
 Downloading costs no context — the bytes go to disk, not into the conversation
 — so the default is on. You still choose whether to read any given image.
 
-- Non-image files (PDFs, zips, video) are **listed but not fetched**. Use
-  `--all-files`, or `download <file-id>` for just the one you want.
+- Non-image files (PDFs, zips, video) are **listed but not fetched** — the line
+  carries the file ID, so `download <file-id>` is the one-step way to get it.
+  `--all-files` fetches them inline instead.
 - Files land in a temp dir, **swept after 24 hours**. Treat it as a cache, not
   storage; copy anything you need to keep. Override with `--files-dir` or
   `SLACK_FILES_DIR`.
 - Re-reading a thread reuses what is already on disk, so it costs nothing.
 - `--no-files` skips downloading, pairing with `--no-threads` for a fast skim.
-- Caps: 25 files per call, 20 MB each.
+- Caps: 25 files per call, 500 MB each.
 
 ```bash
 # Fetch a specific attachment (works for non-images too)
@@ -127,6 +128,21 @@ uv run slack_canvas.py download F0BTHBNFH4Z
 # Grab every attachment in a thread, as JSON
 uv run slack_canvas.py download "https://ws.slack.com/archives/D08.../p178..." --json
 ```
+
+**Videos** download at full resolution — a screen recording is usually someone
+pointing at a specific thing, and Slack's `mp4_low` variant is 640x360, far too
+coarse to read UI text. Attachment lines show duration (`mp4, 4:55, 38.1MB`) so
+you can pick a range. Once downloaded, hand the path to the `visual-transcript`
+skill, which is what actually reads the content:
+
+```bash
+uv run slack_canvas.py download F0BSF51V5DJ
+# -> C:\Users\...\slack-files\F0BSF51V5DJ-Screenshare....mp4
+cd ~/.claude/skills/visual-transcript
+uv run transcribe.py "<that path>" --mode high --range 3:00-4:30
+```
+
+Clip a range rather than sending the whole video — see that skill for costs.
 
 If a download reports **"got an HTML page, not the file"**, the session token or
 cookie is stale — run `doctor`, then `extract-token`.

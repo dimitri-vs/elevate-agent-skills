@@ -452,7 +452,12 @@ def _ts_to_datetime(ts: str) -> str:
     return f"{dt.strftime('%Y-%m-%d %H:%M')} {suffix}"
 
 
-MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# Per-file ceiling. Deliberately generous: screen recordings routinely run
+# 20-50 MB and must arrive at FULL resolution — downstream tools like the
+# visual-transcript skill read on-screen UI text and cursor targets, which a
+# downscaled transcode destroys. Slack's own mp4_low is ~8x smaller and unusable
+# for that, so it is never substituted.
+MAX_ATTACHMENT_BYTES = 500 * 1024 * 1024
 MAX_ATTACHMENTS = 25
 FILES_MAX_AGE_HOURS = 24
 # Names this tool creates: "<file-id>-<safe name>". The sweep touches nothing else.
@@ -520,6 +525,9 @@ def _describe_file(f: dict, local_path: str | None = None) -> list[str]:
     meta = [f.get("filetype") or f.get("mimetype") or "?"]
     if f.get("original_w") and f.get("original_h"):
         meta.append(f"{f['original_w']}x{f['original_h']}")
+    if f.get("duration_ms"):
+        secs = round(f["duration_ms"] / 1000)
+        meta.append(f"{secs // 60}:{secs % 60:02d}")
     if f.get("size"):
         meta.append(_human_size(f["size"]))
     head = f"[{'image' if _is_image(f) else 'file'}] {name} ({', '.join(meta)}) id={fid}"
@@ -545,12 +553,11 @@ def _fetch_message_files(client, messages: list[dict], dest_dir: str | None = No
 
     wanted = [f for f in seen.values() if not images_only or _is_image(f)]
     paths: dict[str, str] = {}
-    oversize = 0
-
     for f in wanted[:MAX_ATTACHMENTS]:
         fid, size = f["id"], f.get("size") or 0
         if size > MAX_ATTACHMENT_BYTES:
-            oversize += 1
+            click.echo(f"  ! {fid} ({f.get('name', '')}): {_human_size(size)} is over "
+                       f"{_human_size(MAX_ATTACHMENT_BYTES)}, skipped", err=True)
             continue
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", f.get("name") or "file")
         target = dest / f"{fid}-{safe}"
@@ -581,8 +588,6 @@ def _fetch_message_files(client, messages: list[dict], dest_dir: str | None = No
         target.write_bytes(data)
         paths[fid] = str(target)
 
-    if oversize:
-        click.echo(f"  ! {oversize} attachment(s) over {_human_size(MAX_ATTACHMENT_BYTES)} skipped", err=True)
     if len(wanted) > MAX_ATTACHMENTS:
         click.echo(f"  ! {len(wanted) - MAX_ATTACHMENTS} more attachment(s) not fetched "
                    f"(cap {MAX_ATTACHMENTS}); use `download` for specific IDs", err=True)
