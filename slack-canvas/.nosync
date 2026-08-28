@@ -1,2 +1,3 @@
-# Per-install secrets — never copied from source; target's copy is preserved
+# Per-install artifacts — never copied from source; target's copy is preserved
 .env
+.user-cache.json

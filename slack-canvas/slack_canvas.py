@@ -5,32 +5,38 @@
 #     "requests",
 #     "python-dotenv",
 #     "markdownify",
+#     "beautifulsoup4",
 #     "cryptography",
+#     "websocket-client",
 # ]
 # ///
-"""Slack CLI — Read Slack canvases, conversations, and threads.
+"""Slack CLI — read, send, and monitor Slack; read and edit canvases.
 
 Token extraction approach inspired by stablyai/agent-slack
 (https://github.com/stablyai/agent-slack).
 """
 
+import html as _html
 import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, parse_qs
 
 import click
 import requests
 from dotenv import load_dotenv
 from markdownify import MarkdownConverter
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def _load_env():
     """Load .env files. Priority: CWD > home > script dir > system env."""
     # Load in reverse priority order with override=True (last loaded wins)
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(SCRIPT_DIR, ".env"), override=True)
     load_dotenv(os.path.expanduser("~/.env"), override=True)
     load_dotenv(override=True)  # CWD
 
@@ -53,6 +59,10 @@ class SlackClient:
         self.has_browser = bool(self.xoxc_token and self.xoxd_cookie)
         self.has_standard = bool(self.standard_token)
 
+        self._user_cache: dict[str, str] | None = None
+        self._user_cache_path = os.path.join(SCRIPT_DIR, ".user-cache.json")
+        self._users_list: list[dict] | None = None
+
         if not self.has_browser and not self.has_standard:
             click.echo(
                 "Error: No Slack credentials found.\n"
@@ -65,10 +75,18 @@ class SlackClient:
 
     @staticmethod
     def _encode_cookie(cookie: str) -> str:
-        """URL-encode the xoxd cookie value for use in Cookie headers."""
-        if "%2F" in cookie or "%2B" in cookie:
+        """URL-encode the xoxd cookie value for use in Cookie headers.
+
+        Detects prior encoding by looking for any %XX escape, so an
+        already-encoded cookie is never double-escaped (%2F -> %252F).
+        """
+        if re.search(r"%[0-9A-Fa-f]{2}", cookie):
             return cookie  # already encoded
         return quote(cookie, safe="")
+
+    def cookie_header(self) -> str:
+        """The `d=...` Cookie header value for browser-token requests."""
+        return f"d={self._encode_cookie(self.xoxd_cookie)}"
 
     def _auth_type_for(self, method: str) -> str:
         """Pick the right token: standard for edit methods, browser for reads."""
@@ -89,7 +107,7 @@ class SlackClient:
         if auth_type == "browser":
             url = f"{self.workspace_url}/api/{method}"
             headers = {
-                "Cookie": f"d={self._encode_cookie(self.xoxd_cookie)}",
+                "Cookie": self.cookie_header(),
                 "Origin": self.workspace_url,
             }
             form_data = {"token": self.xoxc_token}
@@ -108,10 +126,22 @@ class SlackClient:
             clean = {k: v for k, v in params.items() if v is not None}
             return requests.post(url, headers=headers, json=clean, timeout=30)
 
+    def _request_with_backoff(self, auth_type: str, method: str, **params) -> requests.Response:
+        """Execute a request, honouring HTTP 429 Retry-After (up to 5 attempts)."""
+        for attempt in range(5):
+            resp = self._do_api_request(auth_type, method, **params)
+            if resp.status_code != 429:
+                return resp
+            wait = float(resp.headers.get("Retry-After", 2 ** attempt))
+            wait = min(wait, 60)
+            click.echo(f"Rate limited on {method}, waiting {wait:.0f}s...", err=True)
+            time.sleep(wait)
+        return resp
+
     def api(self, method: str, **params) -> dict:
         """Call a Slack Web API method. Dicts/lists in params are JSON-encoded automatically."""
         auth_type = self._auth_type_for(method)
-        resp = self._do_api_request(auth_type, method, **params)
+        resp = self._request_with_backoff(auth_type, method, **params)
         resp.raise_for_status()
         result = resp.json()
         if not result.get("ok"):
@@ -120,7 +150,7 @@ class SlackClient:
             if (auth_type == "browser" and self.has_standard
                     and error in ("invalid_auth", "not_authed", "token_revoked")):
                 click.echo(f"Browser token error ({error}), retrying with standard token...", err=True)
-                resp = self._do_api_request("standard", method, **params)
+                resp = self._request_with_backoff("standard", method, **params)
                 resp.raise_for_status()
                 result = resp.json()
                 if not result.get("ok"):
@@ -134,7 +164,7 @@ class SlackClient:
         headers = {}
         if self.has_browser:
             headers["Authorization"] = f"Bearer {self.xoxc_token}"
-            headers["Cookie"] = f"d={self._encode_cookie(self.xoxd_cookie)}"
+            headers["Cookie"] = self.cookie_header()
         else:
             headers["Authorization"] = f"Bearer {self.standard_token}"
         resp = requests.get(url, headers=headers, timeout=60)
@@ -145,22 +175,84 @@ class SlackClient:
         resp.raise_for_status()
         return resp.text
 
-    def resolve_users(self, user_ids: set[str]) -> dict[str, str]:
-        """Batch-resolve user IDs to display names via users.info."""
-        user_map = {}
-        for uid in user_ids:
+    @staticmethod
+    def _display_name(user: dict) -> str:
+        return (
+            user.get("profile", {}).get("display_name")
+            or user.get("real_name")
+            or user.get("name")
+            or user.get("id", "unknown")
+        )
+
+    def resolve_users(self, user_ids) -> dict[str, str]:
+        """Resolve user IDs to display names, cached on disk and in memory.
+
+        Cache lives at <script dir>/.user-cache.json so repeated history/thread
+        fetches cost zero extra API calls. Unknown IDs are looked up once each.
+        """
+        wanted = {u for u in user_ids if u}
+        if not wanted:
+            return {}
+
+        if self._user_cache is None:
+            self._user_cache = {}
             try:
-                result = self.api("users.info", user=uid)
-                user = result.get("user", {})
-                user_map[uid] = (
-                    user.get("profile", {}).get("display_name")
-                    or user.get("real_name")
-                    or user.get("name")
-                    or uid
-                )
-            except click.ClickException:
-                user_map[uid] = uid
-        return user_map
+                with open(self._user_cache_path, encoding="utf-8") as f:
+                    self._user_cache = json.load(f)
+            except (OSError, ValueError):
+                pass
+
+        missing = wanted - self._user_cache.keys()
+        if missing:
+            for uid in sorted(missing):
+                try:
+                    result = self.api("users.info", user=uid)
+                    self._user_cache[uid] = self._display_name(result.get("user", {}))
+                except (click.ClickException, requests.RequestException):
+                    self._user_cache[uid] = uid
+            try:
+                with open(self._user_cache_path, "w", encoding="utf-8") as f:
+                    json.dump(self._user_cache, f, indent=0, sort_keys=True)
+            except OSError:
+                pass  # cache is an optimisation, never fatal
+
+        return {uid: self._user_cache.get(uid, uid) for uid in wanted}
+
+    def lookup_user(self, needle: str) -> str:
+        """Resolve a user ID, @handle, or email to a user ID.
+
+        `users.lookupByEmail` rejects xoxc tokens, so email and handle lookups
+        fall back to scanning users.list (cached for the process lifetime).
+        """
+        needle = needle.strip().lstrip("@")
+        if re.match(r"^[UW][A-Z0-9]{6,}$", needle):
+            return needle
+
+        if self._users_list is None:
+            self._users_list = []
+            cursor = None
+            while True:
+                params = {"limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                result = self.api("users.list", **params)
+                self._users_list.extend(result.get("members", []))
+                cursor = result.get("response_metadata", {}).get("next_cursor")
+                if not cursor:
+                    break
+
+        low = needle.lower()
+        for u in self._users_list:
+            profile = u.get("profile", {})
+            candidates = {
+                (u.get("name") or "").lower(),
+                (profile.get("display_name") or "").lower(),
+                (profile.get("real_name") or "").lower(),
+                (profile.get("email") or "").lower(),
+            }
+            if low in candidates and not u.get("deleted"):
+                return u["id"]
+        raise click.ClickException(f"No Slack user matches: {needle}")
 
 
 class SlackCanvasConverter(MarkdownConverter):
@@ -176,8 +268,25 @@ class SlackCanvasConverter(MarkdownConverter):
         return super().convert_li(el, text, convert_as_inline)
 
 
+def _li_to_markdown(li) -> str:
+    """Convert a checklist <li>'s inner HTML to markdown, preserving inline formatting.
+
+    Falls back to spaced plain text if conversion yields nothing useful.
+    """
+    inner = "".join(str(c) for c in li.contents)
+    md = SlackCanvasConverter(heading_style="ATX", bullets="-").convert(inner)
+    md = md.replace("​", "").strip()
+    md = re.sub(r"\s*\n\s*", " ", md)
+    return md or li.get_text(" ", strip=True)
+
+
 def _parse_checklist_items(html: str) -> list[dict]:
-    """Parse checklist items from canvas HTML, returning text and checked state."""
+    """Parse checklist items from canvas HTML.
+
+    Each item carries both `text` (plain, space-joined — used for matching and
+    for the sections.lookup query) and `markdown` (inline formatting preserved —
+    used when writing the item back, so links/bold/mentions survive a check).
+    """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
@@ -192,9 +301,13 @@ def _parse_checklist_items(html: str) -> list[dict]:
                 continue  # Not a checklist item
         else:
             checked = checked_attr == "true"
-        text = li.get_text(strip=True)
+        # NOTE: get_text(strip=True) with no separator concatenates nested inline
+        # tags ("Review <b>the</b> doc" -> "Reviewthedoc"), which both breaks
+        # matching and corrupts the item on write-back. Always pass a separator.
+        text = li.get_text(" ", strip=True)
+        text = re.sub(r"\s+", " ", text).strip()
         if text:
-            items.append({"text": text, "checked": checked})
+            items.append({"text": text, "checked": checked, "markdown": _li_to_markdown(li)})
     return items
 
 
@@ -220,13 +333,22 @@ def parse_slack_url(value: str) -> dict:
         if parsed.hostname and parsed.hostname.endswith(".slack.com"):
             parts = parsed.path.strip("/").split("/")
 
-            # Archive URLs: /archives/CXXXXXX/p1771540768173789
+            # Archive URLs: /archives/CXXXXXX/p1771540768173789[?thread_ts=...]
             if len(parts) >= 2 and parts[0] == "archives":
                 channel = parts[1]
-                if len(parts) >= 3 and parts[2].startswith("p"):
+                query = parse_qs(parsed.query or "")
+                if len(parts) >= 3 and re.match(r"^p\d{10,}$", parts[2]):
                     raw_ts = parts[2][1:]  # strip the 'p'
-                    ts = raw_ts[:10] + "." + raw_ts[10:]
-                    return {"type": "thread", "channel": channel, "ts": ts}
+                    msg_ts = raw_ts[:10] + "." + raw_ts[10:]
+                    # "Copy link" on a REPLY yields the reply's ts in the path and
+                    # the parent's in ?thread_ts=. conversations.replies needs the
+                    # parent, so prefer thread_ts when present or we silently fetch
+                    # a one-message "thread".
+                    parent_ts = (query.get("thread_ts") or [None])[0]
+                    result = {"type": "thread", "channel": channel, "ts": parent_ts or msg_ts}
+                    if parent_ts and parent_ts != msg_ts:
+                        result["highlight_ts"] = msg_ts
+                    return result
                 return {"type": "channel", "channel": channel}
 
             # Canvas URLs: /docs/TXXXXX/FXXXXX
@@ -254,29 +376,108 @@ def parse_canvas_id(value: str) -> str:
 
 
 def resolve_channel_id(client: SlackClient, channel: str) -> str:
-    """Resolve a channel name or ID to a channel ID."""
-    channel = channel.strip().lstrip("#")
-    if re.match(r"^[CDG][A-Z0-9]{8,}$", channel):
+    """Resolve a channel name, ID, Slack URL, @user, or user ID to a channel ID.
+
+    Accepts:
+      C.../D.../G... ID   -> returned as-is
+      a Slack archive URL -> the channel from the URL
+      #name or name       -> matched against public + private channels
+      @handle / email / U -> opens (or reuses) the DM with that person
+    """
+    channel = channel.strip()
+
+    if channel.startswith("http"):
+        parsed = parse_slack_url(channel)
+        if parsed.get("channel"):
+            return parsed["channel"]
+        raise click.ClickException(f"URL does not point at a conversation: {channel}")
+
+    if re.match(r"^[CDG][A-Z0-9]{6,}$", channel):
         return channel
-    # Search by name
+
+    # A user reference means "the DM with this person".
+    if channel.startswith("@") or re.match(r"^[UW][A-Z0-9]{6,}$", channel) or "@" in channel:
+        user_id = client.lookup_user(channel)
+        opened = client.api("conversations.open", users=user_id)
+        return opened["channel"]["id"]
+
+    name = channel.lstrip("#")
     cursor = None
     while True:
-        params = {"types": "public_channel,private_channel", "limit": 200}
+        params = {
+            "types": "public_channel,private_channel,mpim,im",
+            "limit": 200,
+            "exclude_archived": True,
+        }
         if cursor:
             params["cursor"] = cursor
         result = client.api("conversations.list", **params)
         for ch in result.get("channels", []):
-            if ch.get("name") == channel or ch.get("name_normalized") == channel:
+            if name in (ch.get("name"), ch.get("name_normalized")):
                 return ch["id"]
         cursor = result.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
-    raise click.ClickException(f"Channel not found: #{channel}")
+    raise click.ClickException(
+        f"Channel not found: #{name}\n"
+        "Pass a channel ID (C.../D...), a Slack URL, or @person for a DM."
+    )
 
 
 def _ts_to_datetime(ts: str) -> str:
-    """Convert a Slack timestamp to a human-readable date string."""
-    return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    """Convert a Slack timestamp to a human-readable LOCAL date string.
+
+    Rendering in UTC (the previous behaviour) silently shifted every timestamp
+    by the local offset with nothing marking it, which made transcripts read
+    hours off. Local time with a %Z suffix is what a human actually wants.
+    """
+    try:
+        dt = datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone()
+    except (TypeError, ValueError):
+        return "unknown time"
+    # %Z spells out "Eastern Daylight Time" on Windows; a numeric offset is
+    # compact and unambiguous everywhere.
+    offset = dt.strftime("%z")
+    suffix = f"UTC{offset[:3].lstrip('0') or '+0'}{':' + offset[3:] if offset[3:] != '00' else ''}"
+    return f"{dt.strftime('%Y-%m-%d %H:%M')} {suffix}"
+
+
+def _message_body(msg: dict) -> str:
+    """Best-effort readable body for a message, including non-plain-text content.
+
+    Plain `text` is empty for many real messages (attachment-only posts, some
+    bot/app messages, file shares), which previously rendered as blank lines.
+    """
+    parts = []
+    text = (msg.get("text") or "").strip()
+    if text:
+        parts.append(text)
+
+    for att in msg.get("attachments") or []:
+        chunk = " ".join(
+            s for s in [att.get("title"), att.get("text") or att.get("fallback")] if s
+        ).strip()
+        if chunk:
+            parts.append(f"[attachment] {chunk}")
+
+    for f in msg.get("files") or []:
+        name = f.get("name") or f.get("title") or "file"
+        parts.append(f"[file] {name} ({f.get('filetype', '?')}) {f.get('permalink', '')}".rstrip())
+
+    if not parts and msg.get("subtype"):
+        parts.append(f"[{msg['subtype']}]")
+
+    return "\n".join(parts) or "[no text content]"
+
+
+def _format_reactions(msg: dict) -> str:
+    """Render reactions as a compact trailing line, or '' if there are none."""
+    reactions = msg.get("reactions") or []
+    if not reactions:
+        return ""
+    return "   reactions: " + ", ".join(
+        f":{r.get('name')}: x{r.get('count', 0)}" for r in reactions
+    )
 
 
 def _format_messages(messages: list[dict], user_map: dict[str, str], indent: bool = False) -> str:
@@ -289,13 +490,16 @@ def _format_messages(messages: list[dict], user_map: dict[str, str], indent: boo
     """
     lines = []
     for msg in messages:
-        user = user_map.get(msg.get("user", ""), msg.get("user", "unknown"))
+        author = msg.get("user") or msg.get("bot_id") or ""
+        user = user_map.get(author) or msg.get("username") or author or "unknown"
         ts = _ts_to_datetime(msg.get("ts", "0"))
-        text = msg.get("text", "")
         prefix = "  > " if indent else ""
         lines.append(f"{prefix}**{user}** ({ts}):")
-        for line in text.split("\n"):
+        for line in _message_body(msg).split("\n"):
             lines.append(f"{prefix}{line}")
+        reactions = _format_reactions(msg)
+        if reactions:
+            lines.append(f"{prefix}{reactions.strip()}")
         lines.append("")
     return "\n".join(lines)
 
@@ -314,7 +518,11 @@ def _output_text(text: str, output_path: str | None):
 
 @click.group()
 def cli():
-    """Slack CLI — read canvases, conversations, and threads."""
+    """Slack CLI — read, send, watch; plus canvas read/edit.
+
+    Run `doctor` first if anything is failing: it reports which tokens are
+    present, who they authenticate as, and which commands they unlock.
+    """
     pass
 
 
@@ -331,6 +539,84 @@ def test_auth():
         "team_id": result.get("team_id"),
         "url": result.get("url"),
     }, indent=2))
+
+
+@cli.command()
+def doctor():
+    """Diagnose credentials: which tokens exist, who they are, what they unlock."""
+    _load_env()
+    xoxc = os.getenv("SLACK_XOXC_TOKEN")
+    xoxd = os.getenv("SLACK_XOXD_COOKIE")
+    std = os.getenv("SLACK_TOKEN")
+    workspace = os.getenv("SLACK_WORKSPACE_URL")
+
+    click.echo("Slack credential check")
+    click.echo(f"  .env searched: {os.path.join(SCRIPT_DIR, '.env')}, ~/.env, CWD")
+    click.echo(f"  SLACK_WORKSPACE_URL : {workspace or 'NOT SET  <- required for browser tokens'}")
+    if workspace and "YOURWORKSPACE" in workspace.upper():
+        # *.slack.com is wildcard DNS and Slack routes by token, so the placeholder
+        # left behind by extract-token still returns 200 — broken but invisible.
+        click.echo("      ^ this is the placeholder value. It appears to work (wildcard DNS)"
+                   " but should be your real workspace domain.")
+
+    ok_browser = ok_standard = False
+
+    click.echo("\n[browser session tokens]  -> read everything you can see; send AS YOU; watch")
+    if not (xoxc and xoxd):
+        click.echo("  MISSING (need both SLACK_XOXC_TOKEN and SLACK_XOXD_COOKIE)")
+        click.echo("  Fix: uv run slack_canvas.py extract-token --write-env")
+    else:
+        try:
+            r = requests.post(
+                f"{(workspace or 'https://slack.com').rstrip('/')}/api/auth.test",
+                headers={"Cookie": f"d={SlackClient._encode_cookie(xoxd)}"},
+                data={"token": xoxc}, timeout=20,
+            ).json()
+            if r.get("ok"):
+                ok_browser = True
+                click.echo(f"  OK  {r.get('user')} @ {r.get('team')}  ({r.get('user_id')})")
+            else:
+                click.echo(f"  FAILED: {r.get('error')}")
+                if r.get("error") in ("invalid_auth", "not_authed"):
+                    click.echo("  Fix: uv run slack_canvas.py extract-token --write-env")
+        except requests.RequestException as exc:
+            click.echo(f"  ERROR contacting Slack: {exc}")
+
+    click.echo("\n[OAuth token SLACK_TOKEN]  -> canvas EDITS (check/uncheck/append/insert/rename)")
+    if not std:
+        click.echo("  MISSING — canvas edit commands will refuse to run.")
+        click.echo("  These APIs reject browser tokens (not_allowed_token_type), so an")
+        click.echo("  xoxb/xoxp with canvases:write is the only way to edit a canvas.")
+    else:
+        try:
+            resp = requests.post("https://slack.com/api/auth.test",
+                                 headers={"Authorization": f"Bearer {std}"}, timeout=20)
+            r = resp.json()
+            scopes = [s.strip() for s in resp.headers.get("x-oauth-scopes", "").split(",") if s.strip()]
+            if r.get("ok"):
+                ok_standard = True
+                kind = "bot" if std.startswith("xoxb-") else "user"
+                click.echo(f"  OK  {r.get('user')} @ {r.get('team')}  ({kind} token)")
+                canvas = [s for s in scopes if s.startswith("canvases:")]
+                click.echo(f"  canvas scopes: {', '.join(canvas) if canvas else 'NONE — edits will fail'}")
+                if kind == "bot":
+                    click.echo("  note: a bot token only reaches canvases in channels the bot is in,")
+                    click.echo("        and any message it posts appears as the bot, not as you.")
+            else:
+                click.echo(f"  FAILED: {r.get('error')}")
+        except requests.RequestException as exc:
+            click.echo(f"  ERROR contacting Slack: {exc}")
+
+    click.echo("\nCapabilities")
+    for label, enabled in [
+        ("read canvases / threads / history", ok_browser or ok_standard),
+        ("send as you (send, watch)", ok_browser),
+        ("edit canvases (check/append/rename)", ok_standard),
+    ]:
+        click.echo(f"  [{'x' if enabled else ' '}] {label}")
+
+    if not (ok_browser or ok_standard):
+        sys.exit(1)
 
 
 @cli.command()
@@ -409,20 +695,26 @@ def _parse_date(value: str) -> float:
 
 @cli.command()
 @click.argument("channel")
-@click.option("--limit", "-n", default=200, help="Max messages to fetch (default 200)")
+@click.option("--limit", "-n", default=1000, help="Max messages to fetch (default 1000)")
 @click.option("--since", "since", help="Start date (YYYY-MM-DD or relative: 30d, 2w)")
 @click.option("--until", "until_", help="End date (YYYY-MM-DD or relative: 7d)")
-@click.option("--threads", is_flag=True, help="Inline thread replies under each message")
+@click.option("--threads/--no-threads", "threads", default=True,
+              help="Inline thread replies (default ON). --no-threads is a cheap "
+                   "skim of many parent messages for context-gathering.")
 @click.option("--output", "-o", "output_path", help="Write output to file instead of stdout")
 def history(channel, limit, since, until_, threads, output_path):
-    """Fetch recent messages from a channel.
+    """Fetch recent messages from a channel, DM, or @person.
+
+    Thread replies are included by default — a channel read without them is
+    usually missing the actual conversation. Use --no-threads to skim.
 
     \b
     Examples:
         uv run slack_canvas.py history "#general" --since 30d
         uv run slack_canvas.py history "#general" --since 2026-02-01 --until 2026-02-15
-        uv run slack_canvas.py history C07SZJ355RV --since 2w --threads
-        uv run slack_canvas.py history "#engineering" --since 7d -o messages.md
+        uv run slack_canvas.py history D08Q9F1HQGG --since 2w
+        uv run slack_canvas.py history "@sam" --since 7d
+        uv run slack_canvas.py history "#engineering" --since 90d --no-threads -o skim.md
     """
     client = SlackClient()
     channel_id = resolve_channel_id(client, channel)
@@ -436,7 +728,9 @@ def history(channel, limit, since, until_, threads, output_path):
     # Paginate to collect up to `limit` messages
     messages = []
     cursor = None
+    more_available = False
     while len(messages) < limit:
+        api_params["limit"] = min(200, limit - len(messages))
         if cursor:
             api_params["cursor"] = cursor
         resp = client.api("conversations.history", **api_params)
@@ -447,11 +741,22 @@ def history(channel, limit, since, until_, threads, output_path):
         cursor = resp.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
-    messages = messages[:limit]
+        more_available = True
+    if len(messages) > limit:
+        messages = messages[:limit]
 
     if not messages:
         click.echo("No messages found.")
         return
+
+    # Truncation used to be silent, which quietly turned "last 30 days" into
+    # "the newest 200 messages" with no way to notice.
+    if len(messages) >= limit and more_available:
+        click.echo(
+            f"Warning: hit the --limit of {limit} messages; older messages in this "
+            f"range were NOT fetched. Re-run with a larger -n or a narrower --since.",
+            err=True,
+        )
 
     # Reverse to chronological order (API returns newest first)
     messages.reverse()
@@ -489,12 +794,23 @@ def history(channel, limit, since, until_, threads, output_path):
 def search(query, channel, limit):
     """Search for canvases by title. Lists all canvases if no query given."""
     client = SlackClient()
-    params = {"types": "canvas", "count": min(limit, 100)}
+    base_params = {"types": "canvas", "count": 100}
     if channel:
-        params["channel"] = resolve_channel_id(client, channel)
+        base_params["channel"] = resolve_channel_id(client, channel)
 
-    result = client.api("files.list", **params)
-    files = result.get("files", [])
+    # With a query we must page the whole file list — filtering happens client
+    # side, so stopping at the first page would hide any canvas that is not
+    # among the most recently updated ones.
+    max_pages = 20 if query else 1
+    files, page = [], 1
+    while page <= max_pages:
+        result = client.api("files.list", page=page, **base_params)
+        batch = result.get("files", [])
+        files.extend(batch)
+        paging = result.get("paging", {})
+        if not batch or page >= paging.get("pages", 1):
+            break
+        page += 1
 
     if query:
         q = query.lower()
@@ -505,11 +821,14 @@ def search(query, channel, limit):
         return
 
     for f in files[:limit]:
-        title = f.get("title") or f.get("name") or "(untitled)"
+        title = _html.unescape(f.get("title") or f.get("name") or "(untitled)")
         fid = f.get("id", "?")
         channels = ", ".join(f.get("channels", []))
         ch_info = f" [#{channels}]" if channels else ""
         click.echo(f"  {fid}  {title}{ch_info}")
+
+    if len(files) > limit:
+        click.echo(f"  ... {len(files) - limit} more (raise -n to see them)", err=True)
 
 
 @cli.command("channel-canvas")
@@ -628,7 +947,7 @@ def check(canvas, item_text):
             "section_id": sections[0]["id"],
             "document_content": {
                 "type": "markdown",
-                "markdown": f"- [x] {match['text']}\n",
+                "markdown": f"- [x] {match.get('markdown') or match['text']}\n",
             },
         }],
     )
@@ -666,7 +985,7 @@ def uncheck(canvas, item_text):
             "section_id": sections[0]["id"],
             "document_content": {
                 "type": "markdown",
-                "markdown": f"- [ ] {match['text']}\n",
+                "markdown": f"- [ ] {match.get('markdown') or match['text']}\n",
             },
         }],
     )
@@ -762,6 +1081,263 @@ def rename(canvas, new_title):
         }],
     )
     click.echo(f"Renamed to: {new_title}")
+
+
+@cli.command()
+@click.argument("target", required=False)
+@click.option("--thread", "thread_ref", help="Only events in this thread (parent ts or URL)")
+@click.option("--timeout", "-T", default=900, help="Give up after N seconds (default 900)")
+@click.option("--exit-on-first", is_flag=True,
+              help="Return as soon as one matching event arrives (poll-loop replacement)")
+@click.option("--reactions/--no-reactions", default=True,
+              help="Report reaction_added events (default on) — a thumbsup often IS the reply")
+@click.option("--include-self", is_flag=True, help="Also report your own messages")
+def watch(target, thread_ref, timeout, exit_on_first, reactions, include_self):
+    """Watch for new messages and reactions in real time (no polling).
+
+    Opens Slack's RTM websocket using your browser session, so it sees
+    everything you can see — including DMs — and pushes events as they happen.
+    Prints one JSON object per line, then exits on timeout or --exit-on-first.
+
+    \b
+    Examples:
+        uv run slack_canvas.py watch D08Q9F1HQGG --exit-on-first
+        uv run slack_canvas.py watch --thread URL -T 1800
+        uv run slack_canvas.py watch "#general" --no-reactions
+    """
+    try:
+        from websocket import create_connection
+    except ImportError:
+        raise click.ClickException("websocket-client is required: run via `uv run slack_canvas.py`")
+
+    client = SlackClient()
+    if not client.has_browser:
+        raise click.ClickException(
+            "watch needs browser tokens (SLACK_XOXC_TOKEN + SLACK_XOXD_COOKIE).\n"
+            "Bot tokens cannot see your DMs and are not supported here."
+        )
+
+    channel_id = resolve_channel_id(client, target) if target else None
+    thread_ts = _resolve_thread_ts(thread_ref)
+    me = client.api("auth.test").get("user_id")
+
+    conn = client.api("rtm.connect")
+    # The gateway rejects the token on the querystring; the session cookie must
+    # be presented on the websocket handshake itself.
+    ws = create_connection(
+        conn["url"], timeout=30,
+        header=[f"Cookie: {client.cookie_header()}", f"Origin: {client.workspace_url}"],
+    )
+    hello = json.loads(ws.recv())
+    if hello.get("type") != "hello":
+        ws.close()
+        raise click.ClickException(f"RTM handshake failed: {json.dumps(hello)[:200]}")
+
+    scope = channel_id or "all conversations"
+    click.echo(f"Watching {scope}"
+               f"{f' thread {thread_ts}' if thread_ts else ''} "
+               f"for up to {timeout}s. Ctrl-C to stop.", err=True)
+
+    deadline = time.time() + timeout
+    matched = 0
+    try:
+        while time.time() < deadline:
+            try:
+                ws.settimeout(max(1.0, min(30.0, deadline - time.time())))
+                event = json.loads(ws.recv())
+            except json.JSONDecodeError:
+                continue
+            except Exception as exc:
+                if time.time() >= deadline:
+                    break
+                click.echo(f"(socket closed: {type(exc).__name__}; reconnecting)", err=True)
+                conn = client.api("rtm.connect")
+                ws = create_connection(
+                    conn["url"], timeout=30,
+                    header=[f"Cookie: {client.cookie_header()}",
+                            f"Origin: {client.workspace_url}"],
+                )
+                ws.recv()
+                continue
+
+            etype = event.get("type")
+            if etype == "message":
+                ev_channel = event.get("channel")
+                ev_user = event.get("user")
+                if event.get("subtype") in ("message_deleted", "message_changed"):
+                    continue
+                if channel_id and ev_channel != channel_id:
+                    continue
+                if thread_ts and event.get("thread_ts") != thread_ts:
+                    continue
+                if ev_user == me and not include_self:
+                    continue
+                name = client.resolve_users([ev_user]).get(ev_user, ev_user)
+                payload = {
+                    "event": "message", "channel": ev_channel, "user": ev_user,
+                    "name": name, "ts": event.get("ts"),
+                    "thread_ts": event.get("thread_ts"), "text": _message_body(event),
+                }
+            elif etype in ("reaction_added", "reaction_removed") and reactions:
+                item = event.get("item") or {}
+                ev_channel = item.get("channel")
+                if channel_id and ev_channel != channel_id:
+                    continue
+                # A reaction on the thread parent counts as activity on the thread.
+                if thread_ts and item.get("ts") != thread_ts:
+                    continue
+                if event.get("user") == me and not include_self:
+                    continue
+                name = client.resolve_users([event.get("user")]).get(event.get("user"))
+                payload = {
+                    "event": etype, "channel": ev_channel, "user": event.get("user"),
+                    "name": name, "reaction": event.get("reaction"),
+                    "item_ts": item.get("ts"),
+                }
+            else:
+                continue
+
+            matched += 1
+            click.echo(json.dumps(payload, ensure_ascii=False))
+            sys.stdout.flush()
+            if exit_on_first:
+                break
+    except KeyboardInterrupt:
+        click.echo("Stopped.", err=True)
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    if matched == 0:
+        click.echo(f"No matching activity within {timeout}s.", err=True)
+        sys.exit(2)
+
+
+def _resolve_thread_ts(value: str | None) -> str | None:
+    """Accept a raw ts or a Slack message URL for --thread."""
+    if not value:
+        return None
+    value = value.strip()
+    if re.match(r"^\d{10}\.\d{1,8}$", value):
+        return value
+    parsed = parse_slack_url(value)
+    if parsed["type"] != "thread":
+        raise click.ClickException(f"--thread needs a message URL or ts, got: {value}")
+    return parsed["ts"]
+
+
+def _upload_files(client: SlackClient, channel_id: str, paths: tuple[str, ...],
+                  comment: str | None, thread_ts: str | None) -> dict:
+    """Upload files via the current external-upload flow and share them.
+
+    files.upload was retired in 2025; getUploadURLExternal + completeUploadExternal
+    is the supported path.
+    """
+    uploaded = []
+    for raw_path in paths:
+        path = os.path.expanduser(raw_path)
+        if not os.path.isfile(path):
+            raise click.ClickException(f"Attachment not found: {path}")
+        size = os.path.getsize(path)
+        name = os.path.basename(path)
+
+        ticket = client.api("files.getUploadURLExternal", filename=name, length=size)
+        upload_url, file_id = ticket["upload_url"], ticket["file_id"]
+
+        with open(path, "rb") as fh:
+            put = requests.post(upload_url, files={"file": (name, fh)}, timeout=180)
+        put.raise_for_status()
+        uploaded.append({"id": file_id, "title": name})
+        click.echo(f"  uploaded {name} ({size:,} bytes)", err=True)
+
+    params = {"files": uploaded, "channel_id": channel_id}
+    if comment:
+        params["initial_comment"] = comment
+    if thread_ts:
+        params["thread_ts"] = thread_ts
+    return client.api("files.completeUploadExternal", **params)
+
+
+@cli.command()
+@click.argument("target")
+@click.option("--text", "-m", help="Message text (markdown-ish Slack mrkdwn)")
+@click.option("--file", "-f", "text_file", type=click.Path(exists=True, dir_okay=False),
+              help="Read message text from a file (avoids shell-quoting problems)")
+@click.option("--thread", "thread_ref", help="Reply in a thread: parent ts or message URL")
+@click.option("--attach", "-a", multiple=True, help="Attach a file (repeatable)")
+@click.option("--unfurl/--no-unfurl", default=True, help="Expand link previews (default on)")
+@click.option("--dry-run", is_flag=True, help="Print what would be sent, send nothing")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the result as JSON (for scripts: channel, ts, permalink)")
+def send(target, text, text_file, thread_ref, attach, unfurl, dry_run, as_json):
+    """Send a message as YOU (no 'Sent using Claude' footer).
+
+    TARGET may be a channel (#name or C...), a DM (D...), an @person or email,
+    or any Slack URL. With browser tokens the message posts under your own
+    account, exactly as if you had typed it.
+
+    \b
+    Examples:
+        uv run slack_canvas.py send "#general" -m "shipping in 10"
+        uv run slack_canvas.py send "@sam" -f draft.md
+        uv run slack_canvas.py send URL --thread URL -m "bumping this"
+        uv run slack_canvas.py send "#design" -m "see attached" -a shot.png
+    """
+    client = SlackClient()
+
+    if text_file:
+        with open(text_file, encoding="utf-8") as f:
+            file_text = f.read().strip()
+        text = f"{text}\n\n{file_text}" if text else file_text
+    if not text and not attach:
+        raise click.ClickException("Nothing to send: pass --text/-m, --file/-f, or --attach/-a")
+
+    channel_id = resolve_channel_id(client, target)
+    thread_ts = _resolve_thread_ts(thread_ref)
+
+    if dry_run:
+        if as_json:
+            click.echo(json.dumps({
+                "dry_run": True, "channel": channel_id, "thread_ts": thread_ts,
+                "attachments": list(attach), "text": text,
+            }))
+            return
+        click.echo(f"[dry-run] channel={channel_id}"
+                   f"{' thread_ts=' + thread_ts if thread_ts else ''}"
+                   f"{' attachments=' + str(list(attach)) if attach else ''}")
+        click.echo("--- message ---")
+        click.echo(text or "(no text, attachments only)")
+        return
+
+    if attach:
+        result = _upload_files(client, channel_id, attach, text, thread_ts)
+        if as_json:
+            click.echo(json.dumps({
+                "ok": True, "channel": channel_id, "attachments": len(attach),
+                "files": [f.get("id") for f in (result.get("files") or [])],
+            }))
+        else:
+            click.echo(f"Sent with {len(attach)} attachment(s) to {channel_id}")
+        return
+
+    params = {"channel": channel_id, "text": text, "unfurl_links": unfurl, "unfurl_media": unfurl}
+    if thread_ts:
+        params["thread_ts"] = thread_ts
+    result = client.api("chat.postMessage", **params)
+    ts = result.get("ts")
+
+    if as_json:
+        payload = {"ok": True, "channel": channel_id, "ts": ts, "thread_ts": thread_ts}
+        try:
+            link = client.api("chat.getPermalink", channel=channel_id, message_ts=ts)
+            payload["permalink"] = link.get("permalink")
+        except click.ClickException:
+            pass
+        click.echo(json.dumps(payload))
+    else:
+        click.echo(f"Sent to {channel_id} (ts {ts})")
 
 
 @cli.command("extract-token")
@@ -870,13 +1446,42 @@ def extract_token(write_env):
     click.echo("SLACK_WORKSPACE_URL=https://YOURWORKSPACE.slack.com")
 
     if write_env and xoxd_cookie:
-        env_path = os.path.join(os.path.dirname(__file__), ".env")
-        with open(env_path, "w") as f:
-            f.write(f'SLACK_XOXC_TOKEN="{xoxc_token}"\n')
-            f.write(f'SLACK_XOXD_COOKIE="{xoxd_cookie}"\n')
-            f.write('SLACK_WORKSPACE_URL="https://YOURWORKSPACE.slack.com"\n')
-        click.echo(f"\nWritten to {env_path}")
-        click.echo("  Edit SLACK_WORKSPACE_URL to your actual workspace domain.")
+        env_path = os.path.join(SCRIPT_DIR, ".env")
+        _merge_env(env_path, {
+            "SLACK_XOXC_TOKEN": xoxc_token,
+            "SLACK_XOXD_COOKIE": xoxd_cookie,
+        })
+        click.echo(f"\nUpdated {env_path} (other keys preserved)")
+        if not os.getenv("SLACK_WORKSPACE_URL"):
+            click.echo("  Note: SLACK_WORKSPACE_URL is not set — add your workspace domain.")
+
+
+def _merge_env(env_path: str, updates: dict[str, str]):
+    """Rewrite only the given keys in a .env, preserving every other line.
+
+    The previous implementation opened the file in "w" and wrote three lines,
+    which wiped SLACK_WORKSPACE_URL and SLACK_TOKEN every time a rotated token
+    was re-extracted — i.e. exactly when you could least afford it.
+    """
+    lines = []
+    if os.path.isfile(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+    remaining = dict(updates)
+    out = []
+    for line in lines:
+        m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+        key = m.group(1) if m else None
+        if key in remaining:
+            out.append(f'{key}="{remaining.pop(key)}"')
+        else:
+            out.append(line)
+    for key, value in remaining.items():
+        out.append(f'{key}="{value}"')
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out).rstrip("\n") + "\n")
 
 
 def _extract_xoxd_windows(slack_dir: str) -> str | None:
@@ -917,20 +1522,29 @@ def _extract_xoxd_windows(slack_dir: str) -> str | None:
     stale_dir = os.path.join(slack_dir, "Network")
     enc_value = None
 
-    # Try the main Cookies DB
+    # Try the main Cookies DB.
+    # NOTE: a locked DB raises sqlite3.OperationalError, which is NOT an OSError
+    # subclass — catching (PermissionError, OSError) here meant the StaleCookies
+    # fallback below never ran in the one situation it exists for.
+    tmp = os.path.join(tempfile.gettempdir(), "slack_cookies_tmp")
     try:
-        tmp = os.path.join(tempfile.gettempdir(), "slack_cookies_tmp")
         shutil.copy2(cookies_db, tmp)
         conn = sqlite3.connect(tmp)
-        row = conn.execute(
-            "SELECT encrypted_value FROM cookies WHERE name='d' AND host_key LIKE '%slack.com' LIMIT 1"
-        ).fetchone()
-        conn.close()
-        os.unlink(tmp)
+        try:
+            row = conn.execute(
+                "SELECT encrypted_value FROM cookies WHERE name='d' AND host_key LIKE '%slack.com' LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             enc_value = row[0]
-    except (PermissionError, OSError):
-        click.echo("  Cookies DB locked, trying StaleCookies...", err=True)
+    except Exception as exc:
+        click.echo(f"  Cookies DB unavailable ({type(exc).__name__}), trying StaleCookies...", err=True)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
     # Fallback: StaleCookies files (available even when Slack is running)
     if enc_value is None:

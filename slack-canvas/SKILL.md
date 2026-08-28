@@ -1,441 +1,250 @@
 ---
 name: slack-canvas
-description: Slack CLI — read canvases, conversations, and threads
+description: Full Slack access for the agent — read threads, DMs and channel history, send messages as the user (no "Sent using Claude" footer), watch for replies and reactions in real time, and read or edit canvases. Use whenever a task involves Slack: reading a conversation from a URL or channel ID, messaging someone, waiting on a reply, or working with a canvas.
 ---
 
 # Slack CLI
 
-Read Slack canvases, conversation threads, and channel history. Supports reading full canvas content, marking checklist items as done, adding notes, fetching threads, and more.
+Gives the agent the same Slack access the user has: read any conversation they
+can see, send messages that appear as them, monitor for replies in real time,
+and read/edit canvases.
 
-## Agent Guidelines
+**All commands:** `cd ~/.claude/skills/slack-canvas && uv run slack_canvas.py <command>`
 
-When the user asks to read a channel or conversation:
+If anything fails, run `doctor` first — it reports which tokens exist, who they
+authenticate as, and which commands they unlock.
 
-1. **Resolve ambiguity** — If the user says a name like "Jessica", search for matching channels first. If multiple match, ask which one they mean before fetching.
-2. **Confirm intent** — The user typically wants you to *read* the conversation for context in the current session, not have it printed out. Save to a file with `-o` when the content is needed beyond this session. Default to reading into context silently unless told otherwise.
-3. **Scope the fetch** — Ask about timeframe (e.g. "last 30 days including threads?") rather than message count. Default to a reasonable window like `--since 30d --threads`. Suggest saving to a file for large ranges.
+## Command reference
 
-## Authentication
-
-Canvas operations use browser-extracted tokens (xoxc/xoxd) which act as your logged-in Slack session. This gives access to any canvas you can see in the Slack UI — including shared team canvases — without needing a Slack app or admin approval.
-
-### Required Environment Variables
-
-```
-SLACK_XOXC_TOKEN=xoxc-...
-SLACK_XOXD_COOKIE=xoxd-...
-SLACK_WORKSPACE_URL=https://yourworkspace.slack.com
-```
-
-### How to Get Tokens
-
-**Automatic extraction (recommended):**
-
-```bash
-# Extracts xoxc from LevelDB + xoxd from Cookies DB (Windows: DPAPI decryption)
-cd "<skill-directory>" && uv run slack_canvas.py extract-token
-
-# Same, but write directly to .env
-cd "<skill-directory>" && uv run slack_canvas.py extract-token --write-env
-```
-
-Close Slack Desktop first if the Cookies DB is locked. On macOS/Linux, the xoxd cookie must still be extracted manually from the browser.
-
-**Manual extraction (fallback):**
-
-Open Slack in your browser → DevTools (F12) → Network tab → find any `/api/` request:
-- **xoxc token**: in request body/form data, `token` field
-- **xoxd cookie**: in Cookie header, `d=xoxd-...` (must be URL-encoded in .env)
-
-**Important**: The xoxd cookie value must be **URL-encoded** (e.g. `%2F` not `/`, `%2B` not `+`). The `extract-token` command handles this automatically.
-
-**Token lifetime**: xoxd cookies last ~1 year (expiry is set by Slack). They are invalidated when you log out. xoxc tokens may rotate when Slack Desktop restarts.
-
-### Alternative: OAuth Bot/User Token
-
-If you have a Slack app with `canvases:read`, `canvases:write`, and `files:read` scopes, you can use a standard token instead:
-
-```
-SLACK_TOKEN=xoxb-... (bot) or xoxp-... (user)
-```
-
-Bot tokens can only access canvases in channels the bot is a member of. User tokens have the same access as the user. For shared team canvases you don't own, user tokens (xoxp-) or browser tokens (xoxc-) are required.
-
-### Token Capabilities
-
-| Operation | xoxc (browser) | xoxp (user OAuth) | xoxb (bot OAuth) |
-|---|---|---|---|
-| Read canvas content | Yes | Yes | Yes (channels bot is in) |
-| Search/list canvases | Yes | Yes | Yes (limited scope) |
-| Edit canvas content | **No** | Yes (`canvases:write`) | Yes (`canvases:write`) |
-| Sections lookup | **No** | Yes (`canvases:read`) | Yes (`canvases:read`) |
-
-The `canvases.edit` and `canvases.sections.lookup` APIs explicitly reject xoxc session tokens (`not_allowed_token_type`). For edit operations, you **must** use an OAuth token (xoxb/xoxp) from a Slack app with the appropriate scopes.
-
-## Auth Headers
-
-All curl commands below use these headers. Construct them based on which token type you have:
-
-**Browser tokens (xoxc/xoxd):** — must use workspace-specific URL (`$SLACK_WORKSPACE_URL/api/...`)
-```bash
--H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
--H "Cookie: d=$SLACK_XOXD_COOKIE" \
--H "Content-Type: application/json; charset=utf-8"
-```
-
-**Standard tokens (xoxb/xoxp):** — can use `https://slack.com/api/...`
-```bash
--H "Authorization: Bearer $SLACK_TOKEN" \
--H "Content-Type: application/json; charset=utf-8"
-```
-
-## API Base URL
-
-The curl examples below use `https://slack.com/api/`. This works for standard tokens (xoxb/xoxp). **For browser tokens (xoxc), replace with your workspace URL:** `https://yourworkspace.slack.com/api/`. The CLI script handles this automatically via `SLACK_WORKSPACE_URL`.
-
-## Canvas IDs
-
-Canvas IDs start with `F` followed by alphanumeric characters (e.g., `F08ABC1234X`). You can find them in:
-
-- **Canvas URL**: `https://workspace.slack.com/docs/TXXXXX/FXXXXX` — the `F...` part is the canvas ID
-- **`files.list` API** with `types=canvas` to discover canvases
-
-```bash
-# List canvases visible to you
-curl -s "https://slack.com/api/files.list?types=canvas&count=20" \
-  -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
-  -H "Cookie: d=$SLACK_XOXD_COOKIE" | python -m json.tool
-```
-
-## Reading a Canvas
-
-There is no direct "get canvas content" API. The standard approach is to treat the canvas as a file, get its download URL, and fetch the HTML.
-
-### Step 1: Get canvas metadata
-
-```bash
-curl -s "https://slack.com/api/files.info?file=CANVAS_ID_HERE" \
-  -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
-  -H "Cookie: d=$SLACK_XOXD_COOKIE" | python -m json.tool
-```
-
-The response includes:
-- `file.title` — canvas title
-- `file.url_private_download` — URL to download the HTML content
-- `file.url_private` — alternative URL (view, not download)
-- `file.created`, `file.updated` — timestamps
-
-### Step 2: Download the HTML content
-
-```bash
-curl -s "URL_PRIVATE_DOWNLOAD_HERE" \
-  -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
-  -H "Cookie: d=$SLACK_XOXD_COOKIE"
-```
-
-This returns the full canvas as HTML. The HTML contains all text, formatting, checklists, headings, etc. Claude can read and understand this HTML directly — no conversion library needed.
-
-### Quick One-Liner (read canvas as HTML)
-
-```bash
-# Get the download URL, then fetch content
-DOWNLOAD_URL=$(curl -s "https://slack.com/api/files.info?file=CANVAS_ID" \
-  -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
-  -H "Cookie: d=$SLACK_XOXD_COOKIE" | python -c "import sys,json; print(json.load(sys.stdin)['file']['url_private_download'])")
-
-curl -s "$DOWNLOAD_URL" \
-  -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
-  -H "Cookie: d=$SLACK_XOXD_COOKIE"
-```
-
-## Editing a Canvas
-
-Use `canvases.edit` to modify canvas content. Edits are targeted using section IDs obtained from `canvases.sections.lookup`.
-
-### Finding Sections
-
-`canvases.sections.lookup` finds sections by text content or heading type. It returns section IDs, not content.
-
-```bash
-curl -s "https://slack.com/api/canvases.sections.lookup" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{
-    "canvas_id": "CANVAS_ID_HERE",
-    "criteria": {
-      "contains_text": "Buy groceries"
-    }
-  }'
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "sections": [
-    { "id": "temp:C:VXX37d27db7718d44e28803566ae" }
-  ]
-}
-```
-
-**Criteria options:**
-- `contains_text` — match sections containing this text
-- `section_types` — filter by heading level: `"h1"`, `"h2"`, `"h3"`, or `"any_header"`
-- Both can be combined
-
-### Editing Content
-
-`canvases.edit` accepts a `changes` array. Each change specifies an operation, content, and optionally a section ID.
-
-```bash
-curl -s "https://slack.com/api/canvases.edit" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{
-    "canvas_id": "CANVAS_ID_HERE",
-    "changes": [
-      {
-        "operation": "OPERATION_HERE",
-        "section_id": "SECTION_ID_HERE",
-        "document_content": {
-          "type": "markdown",
-          "markdown": "YOUR MARKDOWN HERE\n"
-        }
-      }
-    ]
-  }'
-```
-
-**Operations:**
-| Operation | Section ID | Description |
-|---|---|---|
-| `insert_at_end` | not needed | Append content to the end of the canvas |
-| `insert_at_start` | not needed | Prepend content to the beginning |
-| `insert_after` | required | Insert content after a specific section |
-| `insert_before` | required | Insert content before a specific section |
-| `replace` | optional | Replace a section's content, or the entire canvas if no section_id |
-| `delete` | required | Remove a section |
-
-**Renaming a canvas:**
-```json
-{
-  "canvas_id": "CANVAS_ID",
-  "changes": [
-    {
-      "operation": "rename",
-      "title_content": {
-        "type": "markdown",
-        "markdown": "New Canvas Title"
-      }
-    }
-  ]
-}
-```
-
-## Common Patterns
-
-### Mark a Checklist Item as Done
-
-This is the core use case. Two API calls: find the section, then replace it.
-
-```bash
-# 1. Find the section containing the todo item text
-SECTION_ID=$(curl -s "https://slack.com/api/canvases.sections.lookup" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{
-    "canvas_id": "CANVAS_ID",
-    "criteria": { "contains_text": "Buy groceries" }
-  }' | python -c "import sys,json; print(json.load(sys.stdin)['sections'][0]['id'])")
-
-# 2. Replace with checked version
-curl -s "https://slack.com/api/canvases.edit" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d "{
-    \"canvas_id\": \"CANVAS_ID\",
-    \"changes\": [
-      {
-        \"operation\": \"replace\",
-        \"section_id\": \"$SECTION_ID\",
-        \"document_content\": {
-          \"type\": \"markdown\",
-          \"markdown\": \"- [x] Buy groceries\n\"
-        }
-      }
-    ]
-  }"
-```
-
-### Add a Note to the End of a Canvas
-
-```bash
-curl -s "https://slack.com/api/canvases.edit" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{
-    "canvas_id": "CANVAS_ID",
-    "changes": [
-      {
-        "operation": "insert_at_end",
-        "document_content": {
-          "type": "markdown",
-          "markdown": "## Notes\n\nAdded by automation on 2026-02-10.\n"
-        }
-      }
-    ]
-  }'
-```
-
-### Add a New Checklist Item Under a Heading
-
-```bash
-# 1. Find the heading section
-HEADING_ID=$(curl -s "https://slack.com/api/canvases.sections.lookup" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{
-    "canvas_id": "CANVAS_ID",
-    "criteria": {
-      "section_types": ["any_header"],
-      "contains_text": "To-Do"
-    }
-  }' | python -c "import sys,json; print(json.load(sys.stdin)['sections'][0]['id'])")
-
-# 2. Insert new item after the heading
-curl -s "https://slack.com/api/canvases.edit" \
-  -H "Authorization: Bearer $SLACK_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d "{
-    \"canvas_id\": \"CANVAS_ID\",
-    \"changes\": [
-      {
-        \"operation\": \"insert_after\",
-        \"section_id\": \"$HEADING_ID\",
-        \"document_content\": {
-          \"type\": \"markdown\",
-          \"markdown\": \"- [ ] New task item\n\"
-        }
-      }
-    ]
-  }"
-```
-
-## Canvas Markdown Format
-
-Canvases use markdown with some Slack-specific extensions:
-
-| Element | Syntax |
+| Command | What it does |
 |---|---|
-| Unchecked item | `- [ ] Task text` |
-| Checked item | `- [x] Task text` |
-| Heading 1 | `# Title` |
-| Heading 2 | `## Subtitle` |
-| Heading 3 | `### Section` |
-| Bold | `**text**` |
-| Italic | `_text_` |
-| Strikethrough | `~text~` |
-| Bulleted list | `- item` |
-| Numbered list | `1. item` |
-| Code block | `` ```code``` `` |
-| Inline code | `` `code` `` |
-| Link | `[text](url)` |
-| User mention | `![](@U123ABCDEFG)` |
-| Channel mention | `![](#C123ABC456)` |
-| Divider | `---` |
-| Quote | `> text` |
+| `doctor` | Diagnose credentials and capabilities. Start here when something breaks. |
+| `thread <url\|-c CH -t TS>` | Fetch a thread (parent + replies) |
+| `history <target>` | Channel/DM history; **thread replies included by default** |
+| `send <target>` | Post a message **as the user** |
+| `watch [target]` | Real-time monitor for new messages and reactions |
+| `read <canvas>` | Canvas content as markdown |
+| `search [query]` | Find canvases by title |
+| `channel-canvas <ch>` | Canvas attached to a channel's canvas tab |
+| `check` / `uncheck` | Toggle a canvas checklist item *(needs OAuth token)* |
+| `append` / `insert` / `rename` | Edit canvas content *(needs OAuth token)* |
+| `test-auth` | Quick identity check |
+| `extract-token` | Pull fresh browser tokens from Slack Desktop |
 
-**Limitations:**
-- Block Kit is NOT supported in canvases (markdown only)
-- Tables have a 300-cell limit
-- Nested formatting in certain combinations can cause `canvas_editing_failed` errors (e.g., a list inside a blockquote)
-- Each checklist item is its own section — you replace one item at a time
+### Targets — what you can pass
 
-## Conversation Commands
+Anywhere a target is accepted (`history`, `send`, `watch`):
 
-### Fetch a Thread
+- **Channel/DM ID** — `C0AQ5K17UDS`, `D08Q9F1HQGG`
+- **Slack URL** — `https://ws.slack.com/archives/D08Q9F1HQGG/p1787211618301419`
+- **Channel name** — `#general`
+- **A person** — `@sam`, or their email (opens/reuses the DM)
 
-Retrieve a full conversation thread (parent message + all replies) from an archive URL or channel + timestamp.
+Archive URLs are parsed automatically. A "Copy link" URL taken from a *reply*
+carries `?thread_ts=` — that parent timestamp is used, so you get the whole
+thread rather than a single orphaned message.
 
-```bash
-# Most common: paste an archive URL
-cd "<skill-directory>" && uv run slack_canvas.py thread "https://workspace.slack.com/archives/C07SZJ355RV/p1771540768173789"
+## Agent guidelines
 
-# Or use explicit channel + timestamp
-cd "<skill-directory>" && uv run slack_canvas.py thread -c C07SZJ355RV -t 1771540768.173789
+1. **Resolve ambiguity** — if the user says a name like "Jessica", search for
+   matching channels/people first. If several match, ask before fetching.
+2. **Read into context, don't print** — the user usually wants you to *know* the
+   conversation, not to see it dumped. Use `-o <file>` only when the content is
+   needed beyond this session or the range is large.
+3. **Scope by timeframe, not message count** — ask "last 30 days including
+   threads?" rather than "how many messages?". `--since 30d` is a good default.
+4. **Threads are on by default.** A channel read without replies is usually
+   missing the actual conversation. Reach for `--no-threads` only to skim a
+   large volume of parent messages cheaply for context.
 
-# Save to file
-cd "<skill-directory>" && uv run slack_canvas.py thread URL -o /path/to/output.txt
-```
-
-The archive URL's `p`-prefixed timestamp (e.g. `p1771540768173789`) is automatically converted to the API format (`1771540768.173789`).
-
-### Fetch Channel History
-
-Retrieve recent messages from a channel, optionally with thread replies inlined.
+## Reading conversations
 
 ```bash
-# Last 30 days with threads
-cd "<skill-directory>" && uv run slack_canvas.py history "#general" --since 30d --threads
+# A thread from a pasted URL (the most common case)
+uv run slack_canvas.py thread "https://ws.slack.com/archives/C07SZJ355RV/p1771540768173789"
 
-# Date range
-cd "<skill-directory>" && uv run slack_canvas.py history "#general" --since 2026-02-01 --until 2026-02-15
+# Explicit channel + timestamp
+uv run slack_canvas.py thread -c C07SZJ355RV -t 1771540768.173789
 
-# Last 2 weeks, save to file
-cd "<skill-directory>" && uv run slack_canvas.py history "#engineering" --since 2w --threads -o messages.md
+# DM history — threads included automatically
+uv run slack_canvas.py history D08Q9F1HQGG --since 30d
+
+# Skim a busy channel for context, parents only
+uv run slack_canvas.py history "#engineering" --since 90d --no-threads
+
+# Date range, saved to a file
+uv run slack_canvas.py history "#general" --since 2026-02-01 --until 2026-02-15 -o out.md
 ```
 
-Options:
-- `--since`: Start date — `YYYY-MM-DD` or relative (`30d`, `2w`, `3m`)
-- `--until`: End date — same formats (defaults to now)
-- `--limit` / `-n`: Max messages to fetch (default 200)
-- `--threads`: Fetch and inline thread replies under each parent message
-- `--output` / `-o`: Write to file instead of stdout
+Options: `--since` / `--until` (`YYYY-MM-DD` or relative `30d`, `2w`, `3m`),
+`--limit/-n` (default 1000; warns if it truncates), `--threads/--no-threads`,
+`--output/-o`.
 
-### Output Format
-
-Messages are formatted as:
+Output format — timestamps are **local time** with a UTC offset, and reactions
+are shown because a 👍 is often the actual answer:
 
 ```
-**Username** (2026-02-19 10:32):
-The main message text here
+**Username** (2026-02-19 10:32 UTC-05):
+The main message text
+reactions: :+1: x1
 
-  > **Replier** (2026-02-19 10:35):
+  > **Replier** (2026-02-19 10:35 UTC-05):
   > A threaded reply
 ```
 
-User IDs are resolved to display names automatically.
+## Sending messages
 
-### Output to File (`-o`)
-
-The `thread`, `history`, and `read` commands all support `-o` / `--output` to write to a file instead of stdout:
+Sends use the browser session, so messages appear as the user — no
+"Sent using Claude" footer.
 
 ```bash
-cd "<skill-directory>" && uv run slack_canvas.py thread URL -o ~/Downloads/thread.txt
-cd "<skill-directory>" && uv run slack_canvas.py history "#general" -o messages.md
-cd "<skill-directory>" && uv run slack_canvas.py read F0AE1U25EF7 -o canvas.md
+uv run slack_canvas.py send "#general" -m "shipping in 10"
+uv run slack_canvas.py send "@sam" -f draft.md              # body from a file
+uv run slack_canvas.py send <url> --thread <url> -m "bump"  # reply in-thread
+uv run slack_canvas.py send "#design" -m "see attached" -a shot.png
+uv run slack_canvas.py send "@sam" -m "..." --dry-run       # preview, sends nothing
 ```
 
-## Error Handling
+- `-f/--file` avoids shell-quoting problems entirely — prefer it for anything
+  multi-line, and it pairs directly with the `humanize` workflow's temp file.
+- `-a/--attach` is repeatable.
+- `--dry-run` prints the resolved channel and body without sending.
 
-Common error responses from canvas APIs:
+**Identifying as an agent:** because these post as the user, say so when the
+recipient should know. The user will often ask for this explicitly ("start with
+'Claude here,'"). Follow that instruction literally — there is no automatic
+footer to fall back on.
+
+**Approval:** per the user's global rules, human-facing outbound messages go
+through `humanize` first, and approval is only valid *after* the humanized draft
+has been shown. Draft → show → wait → send.
+
+## Watching for replies and reactions
+
+`watch` opens Slack's real-time websocket, so it pushes events as they happen —
+no polling loop, no backoff to hand-roll, and it sees everything the user sees
+including DMs.
+
+```bash
+# Block until someone replies in this DM, then return
+uv run slack_canvas.py watch D08Q9F1HQGG --exit-on-first
+
+# Watch one thread for 30 minutes
+uv run slack_canvas.py watch --thread <url> -T 1800
+
+# Everything, messages only
+uv run slack_canvas.py watch --no-reactions
+```
+
+Options: `--thread`, `--timeout/-T` (default 900s), `--exit-on-first`,
+`--reactions/--no-reactions` (default on), `--include-self`.
+
+Prints one JSON object per line:
+
+```json
+{"event":"message","channel":"D08Q...","user":"U08P...","name":"Oz","ts":"...","text":"sounds good"}
+{"event":"reaction_added","channel":"D08Q...","name":"Oz","reaction":"+1","item_ts":"..."}
+```
+
+Exits `0` when an event matched, `2` on timeout with nothing seen.
+
+**Reactions count as answers.** A 👍 on a question usually means "yes"/"ok" —
+treat `reaction_added` as a reply for the purpose of an ask-and-wait loop.
+
+**Pattern for ask-then-wait:** send the message, then `watch <target>
+--exit-on-first -T <seconds>`. One blocking call replaces a polling loop. For
+waits longer than the timeout, re-invoke `watch`; it is cheap to restart and
+reconnects automatically if the socket drops mid-run.
+
+## Authentication
+
+Two tokens, doing different jobs. `doctor` reports the state of both.
+
+| | xoxc/xoxd (browser session) | SLACK_TOKEN (OAuth xoxb/xoxp) |
+|---|---|---|
+| Read canvases, threads, history | Yes | Yes |
+| Send **as the user** | Yes | No (posts as the bot) |
+| `watch` real-time events | Yes | No |
+| **Edit** canvases | **No** | Yes (`canvases:write`) |
+| `canvases.sections.lookup` | **No** | Yes (`canvases:read`) |
+
+```
+SLACK_XOXC_TOKEN=xoxc-...
+SLACK_XOXD_COOKIE=xoxd-...          # must be URL-encoded
+SLACK_WORKSPACE_URL=https://yourworkspace.slack.com
+SLACK_TOKEN=xoxb-...                # optional; only for canvas edits
+```
+
+`canvases.edit` and `canvases.sections.lookup` reject session tokens with
+`not_allowed_token_type`. That is a hard Slack limitation, not a config error —
+canvas *edits* require an OAuth app; canvas *reads* do not.
+
+A **bot** token (xoxb) only reaches canvases in channels the bot belongs to.
+
+### Refreshing browser tokens
+
+```bash
+uv run slack_canvas.py extract-token              # print
+uv run slack_canvas.py extract-token --write-env  # merge into .env
+```
+
+Extracts xoxc from LevelDB and, on Windows, decrypts xoxd from the Cookies DB
+via DPAPI. Close Slack Desktop first if the DB is locked (there is a
+StaleCookies fallback if you don't). On macOS/Linux, grab xoxd manually:
+DevTools → Application → Cookies → `d`.
+
+`--write-env` **merges** — other keys in `.env` are preserved.
+
+**Token lifetime:** xoxd cookies last ~1 year and die on logout; xoxc may rotate
+when Slack Desktop restarts. On `not_authed`/`invalid_auth`, re-extract.
+
+## Canvas content
+
+`read` returns markdown with checklist state preserved. Editing uses the
+markdown below.
+
+| Element | Syntax |
+|---|---|
+| Unchecked / checked item | `- [ ] Task` / `- [x] Task` |
+| Headings | `# H1`, `## H2`, `### H3` |
+| Bold / italic / strike | `**b**`, `_i_`, `~s~` |
+| Lists | `- item`, `1. item` |
+| Code | `` `inline` ``, ```` ```block``` ```` |
+| Link | `[text](url)` |
+| User / channel mention | `![](@U123ABCDEFG)` / `![](#C123ABC456)` |
+| Divider / quote | `---` / `> text` |
+
+**Limitations:** no Block Kit (markdown only); tables cap at 300 cells; some
+nesting (e.g. a list inside a blockquote) throws `canvas_editing_failed`; each
+checklist item is its own section, so items are replaced one at a time.
+
+## Errors
 
 | Error | Meaning |
 |---|---|
-| `canvas_not_found` | Canvas ID is wrong or you don't have access |
-| `not_authed` / `invalid_auth` | Token expired or invalid — re-extract from browser |
-| `missing_scope` | Token lacks `canvases:read` or `canvases:write` (only for OAuth tokens) |
+| `canvas_not_found` | Wrong ID, or no access |
+| `not_authed` / `invalid_auth` | Token expired — re-extract |
+| `not_allowed_token_type` | Session token used on an edit API — needs `SLACK_TOKEN` |
+| `missing_scope` | OAuth token lacks `canvases:read`/`canvases:write` |
 | `canvas_editing_failed` | Invalid markdown structure or unsupported nesting |
-| `free_teams_cannot_edit_standalone_canvases` | Workspace is on free plan |
-| `no_permission` | You don't have write access to this canvas |
+| `free_teams_cannot_edit_standalone_canvases` | Workspace on the free plan |
+| `no_permission` | No write access to this canvas |
+| `channel_not_found` | Bad ID, or the account isn't in that conversation |
 
 ## Notes
 
-- **Token security**: xoxc/xoxd tokens grant full account access. Never commit them. Use env vars.
-- **Rate limiting**: Slack rate-limits API calls. For canvas operations (infrequent by nature), this is rarely an issue. If you hit a 429, wait for the `Retry-After` header value.
-- **Enterprise Grid**: On Grid workspaces, programmatic use of browser tokens may trigger hijack detection and kill your sessions. For non-Grid workspaces this is not a concern.
-- **sections.lookup returns IDs only**: It does NOT return section content. To read content, use the file download approach. To find a specific section for editing, use `contains_text` in the criteria.
-- **Canvas content via HTML**: The downloaded HTML is a rich document. Claude can parse it directly without needing a conversion library. Look for checklist items as `<li>` elements with checkbox attributes.
+- **Token security**: xoxc/xoxd grant full account access. Never commit them,
+  never send them to a third-party fetcher.
+- **Rate limits**: handled automatically — HTTP 429 is retried honouring
+  `Retry-After`. User names are cached in `.user-cache.json` to keep bulk reads
+  cheap.
+- **Enterprise Grid**: on Grid workspaces, programmatic browser-token use can
+  trip hijack detection and kill sessions. Not a concern on standard workspaces.
+- **`sections.lookup` returns IDs only**, never content. To read content, use
+  `read`; to target an edit, match on `contains_text`.
+- **Raw API details** — undocumented endpoints, curl equivalents, the RTM
+  handshake, canvas edit operations: `reference/canvas-api.md`. Only needed when
+  the CLI doesn't cover the case.
 
 ## References
 
