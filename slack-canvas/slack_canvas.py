@@ -455,6 +455,8 @@ def _ts_to_datetime(ts: str) -> str:
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_ATTACHMENTS = 25
 FILES_MAX_AGE_HOURS = 24
+# Names this tool creates: "<file-id>-<safe name>". The sweep touches nothing else.
+OURS_RE = re.compile(r"^F[A-Z0-9]{6,}-")
 
 
 def _human_size(n) -> str:
@@ -484,17 +486,23 @@ def _files_dir(dest_dir: str | None = None) -> Path:
 
 
 def _sweep_files_dir(dest: Path) -> None:
-    """Delete attachments older than FILES_MAX_AGE_HOURS.
+    """Delete downloaded attachments older than FILES_MAX_AGE_HOURS.
 
     Same self-cleaning contract as the humanize CLI's temp files: this cache is
-    a convenience, never a store.
+    a convenience, never a store. Windows does not reliably clear %TEMP% on its
+    own (Storage Sense only fires on low disk), so nothing else will do it.
+
+    Only ever deletes files matching our own `<file-id>-<name>` naming, so
+    pointing --files-dir at a real directory cannot destroy anything else in it.
     """
     if not dest.is_dir():
         return
     cutoff = time.time() - FILES_MAX_AGE_HOURS * 3600
     for old in dest.iterdir():
         try:
-            if old.is_file() and old.stat().st_mtime < cutoff:
+            if not OURS_RE.match(old.name) or not old.is_file():
+                continue
+            if old.stat().st_mtime < cutoff:
                 old.unlink()
         except OSError:
             pass
