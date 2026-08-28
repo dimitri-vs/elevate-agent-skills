@@ -44,6 +44,16 @@ python skill-sync.py discover "/path/to/projects"
 - `[CONFLICT]` - Both changed (needs `--force`)
 - `[MISSING]` - Target doesn't exist yet
 
+Comparison ignores line endings (CRLF vs LF), so a Windows target that only
+differs by newlines reads as `[OK]` rather than a spurious `[CONFLICT]`. Binary
+files are still compared byte-for-byte.
+
+If the hashing ever changes again, refresh stored baselines with
+`python skill-sync.py sync --rebaseline` — it updates the manifest for installs
+that are already in sync and copies nothing. A stale baseline makes the next
+source edit look like `[CONFLICT]` instead of `[BEHIND]`, which pushes toward
+`--force` for no reason.
+
 ## Workflow
 
 1. **Edit skills here** in the skill subdirectories

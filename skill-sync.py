@@ -116,6 +116,25 @@ def load_nosync(skill_path: Path) -> set[str]:
     return {line.strip() for line in nosync_file.read_text().splitlines() if line.strip() and not line.startswith("#")} | {".nosync"}
 
 
+def normalize_for_hash(data: bytes) -> bytes:
+    """Normalize text content so line endings don't register as edits.
+
+    Targets on Windows routinely end up CRLF (git autocrlf, editors) while the
+    source keeps LF, which made every byte of every synced file differ and
+    produced spurious [CONFLICT] / [LOCAL EDITS] states — pushing users toward
+    `sync --force`, the one flag that destroys real local edits.
+
+    Binary files are hashed byte-for-byte.
+    """
+    if b"\x00" in data[:8192]:
+        return data
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def hash_directory(path: Path, exclude: set[str] | None = None) -> str:
     """Compute a hash of all files in a directory for comparison."""
     if not path.exists():
@@ -132,8 +151,10 @@ def hash_directory(path: Path, exclude: set[str] | None = None) -> str:
                 continue
             if str(rel_path) in exclude or rel_path.name in exclude:
                 continue
-            hasher.update(str(rel_path).encode())
-            hasher.update(file_path.read_bytes())
+            # Use POSIX separators so the path component of the hash is
+            # identical regardless of the platform doing the hashing.
+            hasher.update(rel_path.as_posix().encode())
+            hasher.update(normalize_for_hash(file_path.read_bytes()))
     return hasher.hexdigest()
 
 
@@ -328,6 +349,20 @@ def cmd_sync(args) -> int:
             total += 1
 
             state = analyze_sync_state(source, target, last_synced_hash)
+
+            if getattr(args, "rebaseline", False):
+                # Refresh stale baselines only; never copy. A stale hash makes a
+                # later source edit look like [CONFLICT] instead of [BEHIND],
+                # which nudges toward --force and real data loss.
+                if state["in_sync"] and last_synced_hash != state["source_hash"]:
+                    manifest["installations"][skill_name][target_base]["last_synced_hash"] = state["source_hash"]
+                    manifest_changed = True
+                    print(f"[REBASELINE] {skill_name} -> {target_base}")
+                    synced += 1
+                else:
+                    skipped += 1
+                continue
+
             result = copy_skill(source, target, state, force=args.force, dry_run=args.dry_run)
 
             # Format output
@@ -615,6 +650,9 @@ Status indicators:
     sync_parser.add_argument("skill", nargs="?", help="Specific skill to sync (optional)")
     sync_parser.add_argument("--dry-run", "-n", action="store_true", help="Show what would be done")
     sync_parser.add_argument("--force", "-f", action="store_true", help="Overwrite even if target has local edits")
+    sync_parser.add_argument("--rebaseline", action="store_true",
+                             help="Refresh stored hashes for already-in-sync installs without "
+                                  "copying anything (use after the hash algorithm changes)")
     sync_parser.set_defaults(func=cmd_sync)
 
     # status command
