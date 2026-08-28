@@ -245,6 +245,37 @@ File uploads use `files.getUploadURLExternal` → POST the bytes to the returned
 `upload_url` → `files.completeUploadExternal`. The legacy `files.upload` was
 retired in 2025.
 
+## Downloading an attachment (raw)
+
+Use `slack_canvas.py download` instead of this — it is here for when you need
+the underlying calls.
+
+An attachment's bytes are **not** at its `permalink` (that is the web page).
+Message payloads carry a `files[]` array whose entries hold `id`, `mimetype`,
+`size`, `original_w`/`original_h`, and `url_private_download`.
+
+```bash
+# 1. Metadata, including the real download URL
+curl -s -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
+     -H "Cookie: d=$SLACK_XOXD_COOKIE" \
+     "https://slack.com/api/files.info?file=F0BTHBNFH4Z"
+
+# 2. The bytes — files.slack.com needs the SAME auth headers
+curl -sL -H "Authorization: Bearer $SLACK_XOXC_TOKEN" \
+     -H "Cookie: d=$SLACK_XOXD_COOKIE" \
+     "https://files.slack.com/files-pri/T.../F0BTHBNFH4Z/download/image.png" \
+     -o image.png
+```
+
+If `url_private_download` is already in the message payload, step 1 is
+unnecessary.
+
+**Gotcha — the silent failure:** with a stale token or a missing cookie,
+`files.slack.com` returns **HTTP 200 with an HTML login page**, not a 401. Save
+that to `image.png` and you get a corrupt file with no error anywhere. Always
+check that the first bytes are the expected magic number (`\x89PNG`, `%PDF`)
+rather than `<!doctype` or `<html`. `_fetch_message_files` does this check and
+tells you to run `doctor`.
 ## Real-time events (RTM)
 
 `rtm.connect` returns a WSS URL for xoxc tokens, but the gateway rejects the

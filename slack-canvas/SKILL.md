@@ -1,6 +1,6 @@
 ---
 name: slack-canvas
-description: Full Slack access for the agent — read threads, DMs and channel history, send messages as the user (no "Sent using Claude" footer), watch for replies and reactions in real time, and read or edit canvases. Use whenever a task involves Slack: reading a conversation from a URL or channel ID, messaging someone, waiting on a reply, or working with a canvas.
+description: Full Slack access for the agent — read threads, DMs and channel history, send messages as the user (no "Sent using Claude" footer), watch for replies and reactions in real time, view screenshots and files shared in a conversation, and read or edit canvases. Use whenever a task involves Slack: reading a conversation from a URL or channel ID, viewing an image someone posted, messaging someone, waiting on a reply, or working with a canvas.
 ---
 
 # Slack CLI
@@ -23,6 +23,7 @@ authenticate as, and which commands they unlock.
 | `history <target>` | Channel/DM history; **thread replies included by default** |
 | `send <target>` | Post a message **as the user** |
 | `watch [target]` | Real-time monitor for new messages and reactions |
+| `download <id|url>` | Save attachments locally (images, PDFs, any file) |
 | `read <canvas>` | Canvas content as markdown |
 | `search [query]` | Find canvases by title |
 | `channel-canvas <ch>` | Canvas attached to a channel's canvas tab |
@@ -78,7 +79,7 @@ uv run slack_canvas.py history "#general" --since 2026-02-01 --until 2026-02-15 
 
 Options: `--since` / `--until` (`YYYY-MM-DD` or relative `30d`, `2w`, `3m`),
 `--limit/-n` (default 1000; warns if it truncates), `--threads/--no-threads`,
-`--output/-o`.
+`--files/--no-files`, `--all-files`, `--files-dir`, `--output/-o`.
 
 Output format — timestamps are **local time** with a UTC offset, and reactions
 are shown because a 👍 is often the actual answer:
@@ -91,6 +92,44 @@ reactions: :+1: x1
   > **Replier** (2026-02-19 10:35 UTC-05):
   > A threaded reply
 ```
+
+### Screenshots and attachments
+
+Screenshots usually carry the point of the message — the error, the broken
+layout, the row that looks wrong. So **image attachments download automatically**
+and the output gives you a local path:
+
+```
+[image] image.png (png, 2016x1048, 277.5KB) id=F0BTHBNFH4Z
+        -> C:\Users\...\Temp\slack-files\F0BTHBNFH4Z-image.png
+```
+
+**Read that path.** It is a normal PNG — one read and you see what the sender
+saw. Do not hand-roll `files.info` plus a `files-pri` curl; that is what this
+replaces.
+
+Downloading costs no context — the bytes go to disk, not into the conversation
+— so the default is on. You still choose whether to read any given image.
+
+- Non-image files (PDFs, zips, video) are **listed but not fetched**. Use
+  `--all-files`, or `download <file-id>` for just the one you want.
+- Files land in a temp dir, **swept after 24 hours**. Treat it as a cache, not
+  storage; copy anything you need to keep. Override with `--files-dir` or
+  `SLACK_FILES_DIR`.
+- Re-reading a thread reuses what is already on disk, so it costs nothing.
+- `--no-files` skips downloading, pairing with `--no-threads` for a fast skim.
+- Caps: 25 files per call, 20 MB each.
+
+```bash
+# Fetch a specific attachment (works for non-images too)
+uv run slack_canvas.py download F0BTHBNFH4Z
+
+# Grab every attachment in a thread, as JSON
+uv run slack_canvas.py download "https://ws.slack.com/archives/D08.../p178..." --json
+```
+
+If a download reports **"got an HTML page, not the file"**, the session token or
+cookie is stale — run `doctor`, then `extract-token`.
 
 ## Sending messages
 

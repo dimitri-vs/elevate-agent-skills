@@ -21,8 +21,10 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote, urlparse, parse_qs
 
 import click
@@ -159,8 +161,8 @@ class SlackClient:
             raise click.ClickException(f"Slack API error: {error}")
         return result
 
-    def download(self, url: str) -> str:
-        """Download content from a Slack private URL."""
+    def _download_response(self, url: str):
+        """GET a Slack private URL with whichever auth is available."""
         headers = {}
         if self.has_browser:
             headers["Authorization"] = f"Bearer {self.xoxc_token}"
@@ -173,7 +175,15 @@ class SlackClient:
             click.echo(f"Browser download failed (HTTP {resp.status_code}), retrying with standard token...", err=True)
             resp = requests.get(url, headers={"Authorization": f"Bearer {self.standard_token}"}, timeout=60)
         resp.raise_for_status()
-        return resp.text
+        return resp
+
+    def download(self, url: str) -> str:
+        """Download text content (canvas HTML) from a Slack private URL."""
+        return self._download_response(url).text
+
+    def download_bytes(self, url: str) -> bytes:
+        """Download binary content (images, PDFs) from a Slack private URL."""
+        return self._download_response(url).content
 
     @staticmethod
     def _display_name(user: dict) -> str:
@@ -442,7 +452,136 @@ def _ts_to_datetime(ts: str) -> str:
     return f"{dt.strftime('%Y-%m-%d %H:%M')} {suffix}"
 
 
-def _message_body(msg: dict) -> str:
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS = 25
+FILES_MAX_AGE_HOURS = 24
+
+
+def _human_size(n) -> str:
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "?"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+
+
+def _is_image(f: dict) -> bool:
+    return (f.get("mimetype") or "").startswith("image/")
+
+
+def _files_dir(dest_dir: str | None = None) -> Path:
+    """Where downloaded attachments land.
+
+    A plain temp dir, deliberately: no dependency on any one agent harness's
+    scratchpad, so Claude Code and Codex behave identically. Override with
+    --files-dir or SLACK_FILES_DIR.
+    """
+    return Path(dest_dir or os.getenv("SLACK_FILES_DIR")
+                or Path(tempfile.gettempdir()) / "slack-files")
+
+
+def _sweep_files_dir(dest: Path) -> None:
+    """Delete attachments older than FILES_MAX_AGE_HOURS.
+
+    Same self-cleaning contract as the humanize CLI's temp files: this cache is
+    a convenience, never a store.
+    """
+    if not dest.is_dir():
+        return
+    cutoff = time.time() - FILES_MAX_AGE_HOURS * 3600
+    for old in dest.iterdir():
+        try:
+            if old.is_file() and old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+
+
+def _describe_file(f: dict, local_path: str | None = None) -> list[str]:
+    """Describe one attachment as output lines, written for an agent to act on.
+
+    Always shows the file ID (what `download` takes) and, once fetched, the
+    local path — the agent can then read that path directly and see the same
+    screenshot a human sees inline in Slack.
+    """
+    name = f.get("name") or f.get("title") or "file"
+    fid = f.get("id") or "?"
+    meta = [f.get("filetype") or f.get("mimetype") or "?"]
+    if f.get("original_w") and f.get("original_h"):
+        meta.append(f"{f['original_w']}x{f['original_h']}")
+    if f.get("size"):
+        meta.append(_human_size(f["size"]))
+    head = f"[{'image' if _is_image(f) else 'file'}] {name} ({', '.join(meta)}) id={fid}"
+    if local_path:
+        return [head, f"        -> {local_path}"]
+    return [head, f"        -> not downloaded; run: slack_canvas.py download {fid}"]
+
+
+def _fetch_message_files(client, messages: list[dict], dest_dir: str | None = None,
+                         images_only: bool = True) -> dict[str, str]:
+    """Download attachments; return {file_id: absolute local path}.
+
+    Cached by file ID, so re-reading the same thread costs nothing.
+    """
+    dest = _files_dir(dest_dir)
+    _sweep_files_dir(dest)
+
+    seen: dict[str, dict] = {}
+    for msg in messages:
+        for f in msg.get("files") or []:
+            if f.get("id") and f["id"] not in seen:
+                seen[f["id"]] = f
+
+    wanted = [f for f in seen.values() if not images_only or _is_image(f)]
+    paths: dict[str, str] = {}
+    oversize = 0
+
+    for f in wanted[:MAX_ATTACHMENTS]:
+        fid, size = f["id"], f.get("size") or 0
+        if size > MAX_ATTACHMENT_BYTES:
+            oversize += 1
+            continue
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", f.get("name") or "file")
+        target = dest / f"{fid}-{safe}"
+        if target.exists() and (not size or target.stat().st_size == size):
+            paths[fid] = str(target)
+            continue
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            try:
+                url = (client.api("files.info", file=fid).get("file") or {}).get("url_private_download")
+            except Exception:
+                url = None
+        if not url:
+            click.echo(f"  ! {fid} ({safe}): no download URL", err=True)
+            continue
+        try:
+            data = client.download_bytes(url)
+        except Exception as exc:
+            click.echo(f"  ! {fid} ({safe}): {exc}", err=True)
+            continue
+        # Slack answers 200 with an HTML login page when auth is wrong. Writing
+        # that out as a .png would be a silent corruption.
+        if data[:15].lstrip().lower().startswith((b"<!doctype", b"<html")):
+            click.echo(f"  ! {fid} ({safe}): got an HTML page, not the file — token/cookie "
+                       f"likely stale (run: slack_canvas.py doctor)", err=True)
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        paths[fid] = str(target)
+
+    if oversize:
+        click.echo(f"  ! {oversize} attachment(s) over {_human_size(MAX_ATTACHMENT_BYTES)} skipped", err=True)
+    if len(wanted) > MAX_ATTACHMENTS:
+        click.echo(f"  ! {len(wanted) - MAX_ATTACHMENTS} more attachment(s) not fetched "
+                   f"(cap {MAX_ATTACHMENTS}); use `download` for specific IDs", err=True)
+    return paths
+
+
+def _message_body(msg: dict, file_paths: dict[str, str] | None = None) -> str:
     """Best-effort readable body for a message, including non-plain-text content.
 
     Plain `text` is empty for many real messages (attachment-only posts, some
@@ -461,8 +600,7 @@ def _message_body(msg: dict) -> str:
             parts.append(f"[attachment] {chunk}")
 
     for f in msg.get("files") or []:
-        name = f.get("name") or f.get("title") or "file"
-        parts.append(f"[file] {name} ({f.get('filetype', '?')}) {f.get('permalink', '')}".rstrip())
+        parts.extend(_describe_file(f, (file_paths or {}).get(f.get("id"))))
 
     if not parts and msg.get("subtype"):
         parts.append(f"[{msg['subtype']}]")
@@ -480,13 +618,15 @@ def _format_reactions(msg: dict) -> str:
     )
 
 
-def _format_messages(messages: list[dict], user_map: dict[str, str], indent: bool = False) -> str:
+def _format_messages(messages: list[dict], user_map: dict[str, str], indent: bool = False,
+                     file_paths: dict[str, str] | None = None) -> str:
     """Format Slack messages into readable text.
 
     Args:
         messages: List of Slack message dicts.
         user_map: Mapping of user IDs to display names.
         indent: If True, prefix every line with "  > " (for thread replies).
+        file_paths: {file_id: local path} for attachments already downloaded.
     """
     lines = []
     for msg in messages:
@@ -495,7 +635,7 @@ def _format_messages(messages: list[dict], user_map: dict[str, str], indent: boo
         ts = _ts_to_datetime(msg.get("ts", "0"))
         prefix = "  > " if indent else ""
         lines.append(f"{prefix}**{user}** ({ts}):")
-        for line in _message_body(msg).split("\n"):
+        for line in _message_body(msg, file_paths).split("\n"):
             lines.append(f"{prefix}{line}")
         reactions = _format_reactions(msg)
         if reactions:
@@ -619,12 +759,24 @@ def doctor():
         sys.exit(1)
 
 
+def files_options(fn):
+    """--files / --all-files / --files-dir, shared by `thread` and `history`."""
+    fn = click.option("--files-dir", "files_dir",
+                      help="Where to save attachments (default: temp dir, swept after 24h)")(fn)
+    fn = click.option("--all-files", "all_files", is_flag=True,
+                      help="Also download non-image attachments (PDFs, zips, video)")(fn)
+    fn = click.option("--files/--no-files", "want_files", default=True,
+                      help="Download image attachments so they can be read (default on)")(fn)
+    return fn
+
+
 @cli.command()
 @click.argument("url_or_channel", required=False)
 @click.option("--channel", "-c", "channel_opt", help="Channel ID (alternative to URL)")
 @click.option("--ts", "-t", "ts_opt", help="Thread timestamp (alternative to URL)")
 @click.option("--output", "-o", "output_path", help="Write output to file instead of stdout")
-def thread(url_or_channel, channel_opt, ts_opt, output_path):
+@files_options
+def thread(url_or_channel, channel_opt, ts_opt, output_path, want_files, all_files, files_dir):
     """Fetch a conversation thread.
 
     Most common usage — pass an archive URL:
@@ -665,11 +817,14 @@ def thread(url_or_channel, channel_opt, ts_opt, output_path):
     user_ids = {m.get("user") for m in messages if m.get("user")}
     user_map = client.resolve_users(user_ids)
 
+    file_paths = (_fetch_message_files(client, messages, files_dir, images_only=not all_files)
+                  if want_files else {})
+
     # Format: first message is the parent, rest are replies
     parts = []
-    parts.append(_format_messages(messages[:1], user_map))
+    parts.append(_format_messages(messages[:1], user_map, file_paths=file_paths))
     if len(messages) > 1:
-        parts.append(_format_messages(messages[1:], user_map, indent=True))
+        parts.append(_format_messages(messages[1:], user_map, indent=True, file_paths=file_paths))
 
     _output_text("\n".join(parts).strip(), output_path)
 
@@ -702,7 +857,8 @@ def _parse_date(value: str) -> float:
               help="Inline thread replies (default ON). --no-threads is a cheap "
                    "skim of many parent messages for context-gathering.")
 @click.option("--output", "-o", "output_path", help="Write output to file instead of stdout")
-def history(channel, limit, since, until_, threads, output_path):
+@files_options
+def history(channel, limit, since, until_, threads, output_path, want_files, all_files, files_dir):
     """Fetch recent messages from a channel, DM, or @person.
 
     Thread replies are included by default — a channel read without them is
@@ -776,12 +932,18 @@ def history(channel, limit, since, until_, threads, output_path):
 
     user_map = client.resolve_users(all_user_ids)
 
+    file_paths = {}
+    if want_files:
+        every = list(messages) + [m for r in thread_replies.values() for m in r]
+        file_paths = _fetch_message_files(client, every, files_dir, images_only=not all_files)
+
     # Format output
     parts = []
     for msg in messages:
-        parts.append(_format_messages([msg], user_map).rstrip())
+        parts.append(_format_messages([msg], user_map, file_paths=file_paths).rstrip())
         if msg["ts"] in thread_replies and thread_replies[msg["ts"]]:
-            parts.append(_format_messages(thread_replies[msg["ts"]], user_map, indent=True).rstrip())
+            parts.append(_format_messages(thread_replies[msg["ts"]], user_map, indent=True,
+                                          file_paths=file_paths).rstrip())
         parts.append("")
 
     _output_text("\n".join(parts).strip(), output_path)
@@ -1338,6 +1500,54 @@ def send(target, text, text_file, thread_ref, attach, unfurl, dry_run, as_json):
         click.echo(json.dumps(payload))
     else:
         click.echo(f"Sent to {channel_id} (ts {ts})")
+
+
+@cli.command("download")
+@click.argument("targets", nargs=-1, required=True)
+@click.option("--files-dir", "files_dir",
+              help="Where to save (default: temp dir, swept after 24h)")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON mapping file IDs to paths")
+def download_files(targets, files_dir, as_json):
+    """Download Slack attachments so they can be read locally.
+
+    Accepts bare file IDs, file permalinks, or a message/thread archive URL
+    (which downloads every attachment in that thread). Unlike `thread`, this
+    fetches non-image files too.
+
+    \b
+    Examples:
+        uv run slack_canvas.py download F0BTHBNFH4Z
+        uv run slack_canvas.py download "https://work.slack.com/archives/D08.../p178..."
+    """
+    client = SlackClient()
+    messages: list[dict] = []
+
+    for target in targets:
+        t = target.strip()
+        m = re.search(r"/files/[^/]+/(F[A-Z0-9]+)", t) or re.fullmatch(r"(F[A-Z0-9]{6,})", t)
+        if m:
+            info = client.api("files.info", file=m.group(1)).get("file") or {}
+            info.setdefault("id", m.group(1))
+            messages.append({"files": [info]})
+            continue
+        parsed = parse_slack_url(t)
+        if parsed["type"] != "thread":
+            raise click.ClickException(
+                f"Cannot interpret target: {target}  (expected a file ID, file permalink, "
+                f"or a message/thread archive URL)")
+        resp = client.api("conversations.replies", channel=parsed["channel"],
+                          ts=parsed["ts"], limit=1000)
+        messages.extend(resp.get("messages", []))
+
+    paths = _fetch_message_files(client, messages, files_dir, images_only=False)
+
+    if as_json:
+        click.echo(json.dumps(paths, indent=2))
+    elif paths:
+        for fid, path in paths.items():
+            click.echo(f"{fid}  {path}")
+    else:
+        click.echo("No attachments found.", err=True)
 
 
 @cli.command("extract-token")
