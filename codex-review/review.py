@@ -4,10 +4,11 @@
 # dependencies = []
 # ///
 """
-Lightweight wrapper around `codex exec` via WSL.
+Lightweight wrapper around the native Windows `codex exec`.
 
-Handles WSL invocation (bash -lic for nvm), Windows-to-WSL path conversion,
-clean output capture via -o flag, and result archiving to ~/reviews/.
+Handles clean output capture via -o flag, auth profile swapping, and result
+archiving to ~/reviews/. (Migrated from the WSL-based invocation 2026-08-18 —
+Codex CLI now runs natively on Windows.)
 
 Usage:
     uv run review.py -w "C:\\path\\to\\project" "Your review prompt here"
@@ -19,15 +20,25 @@ import base64
 import json
 import os
 import re
-import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 
 REVIEWS_DIR = Path.home() / "reviews"
+CODEX_HOME = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
+
+# Native Windows install location (PS installer). PATH lookup first so a
+# newer install elsewhere wins; env var override for exotic setups.
+CODEX_EXE = (
+    os.getenv("CODEX_EXE")
+    or shutil.which("codex")
+    or str(Path.home() / "AppData/Local/Programs/OpenAI/Codex/bin/codex.exe")
+)
 
 # Codex CLI model selection notes (as of 2026-07-13):
 # - GPT-5.6 family went GA 2026-07-09: gpt-5.6-sol (flagship), gpt-5.6-terra
@@ -49,18 +60,8 @@ EFFORT_PRESETS = {
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
 # when the user's local CLI is significantly behind. Bump this periodically.
-LAST_KNOWN_CODEX_CLI = (0, 144, 3)
-LAST_KNOWN_CODEX_CLI_DATE = "2026-07-13"
-
-
-def win_to_wsl(path: str) -> str:
-    """Convert a Windows path to a WSL /mnt/ path."""
-    p = PureWindowsPath(path)
-    if not p.drive:
-        return path
-    drive = p.drive[0].lower()
-    rest = "/".join(p.parts[1:])
-    return f"/mnt/{drive}/{rest}"
+LAST_KNOWN_CODEX_CLI = (0, 147, 0)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-08-18"
 
 
 def slugify(text: str, max_len: int = 50) -> str:
@@ -77,7 +78,7 @@ def check_codex_version() -> None:
     """
     try:
         r = subprocess.run(
-            ["wsl", "bash", "-lic", "codex --version"],
+            [CODEX_EXE, "--version"],
             capture_output=True, text=True, timeout=10,
         )
         version_str = (r.stdout or "").strip()
@@ -94,8 +95,8 @@ def check_codex_version() -> None:
                 f"  ⚠️  Your Codex CLI ({local}) is out of date — last known "
                 f"latest is {latest} (checked {LAST_KNOWN_CODEX_CLI_DATE}). "
                 f"Newer models (e.g. the gpt-5.6 family) may be rejected.\n"
-                f"     We recommend upgrading: "
-                f"wsl npm install -g @openai/codex@latest",
+                f"     We recommend upgrading — re-run the installer in pwsh: "
+                f'irm https://chatgpt.com/codex/install.ps1 | iex',
                 file=sys.stderr,
             )
     except Exception:
@@ -111,13 +112,6 @@ def resolve_model(effort: str) -> str:
 # Auth profile management
 # ---------------------------------------------------------------------------
 
-def _wsl(cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["wsl", "bash", "-lc", cmd],
-        capture_output=True, text=True, timeout=timeout,
-    )
-
-
 def _jwt_claims(token: str) -> dict:
     parts = token.split(".")
     if len(parts) != 3:
@@ -129,12 +123,10 @@ def _jwt_claims(token: str) -> dict:
         return {}
 
 
-def _read_auth(path: str = "$HOME/.codex/auth.json") -> dict | None:
-    r = _wsl(f"cat {path}")
-    if r.returncode != 0:
-        return None
+def _read_auth(path: Path | None = None) -> dict | None:
+    path = path or (CODEX_HOME / "auth.json")
     try:
-        return json.loads(r.stdout)
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -150,15 +142,15 @@ def list_profiles() -> None:
     current = _read_auth()
     current_id = (current or {}).get("tokens", {}).get("account_id")
 
-    r = _wsl("ls -1 $HOME/.codex/*.auth.json 2>/dev/null")
-    if r.returncode != 0 or not r.stdout.strip():
+    profiles = sorted(CODEX_HOME.glob("*.auth.json"))
+    profiles = [p for p in profiles if not p.name.startswith("auth.json")]
+    if not profiles:
         print("No profiles configured. Use --account-setup <name> to save the current login.")
         return
 
-    for line in r.stdout.strip().splitlines():
-        fpath = line.strip()
-        name = fpath.rsplit("/", 1)[-1].removesuffix(".auth.json")
-        profile = _read_auth(shlex.quote(fpath))
+    for fpath in profiles:
+        name = fpath.name.removesuffix(".auth.json")
+        profile = _read_auth(fpath)
         active = False
         details = []
         if profile:
@@ -178,14 +170,15 @@ def list_profiles() -> None:
 
 
 def setup_profile(name: str) -> None:
-    r = _wsl("test -f $HOME/.codex/auth.json && echo ok")
-    if "ok" not in (r.stdout or ""):
+    auth_file = CODEX_HOME / "auth.json"
+    if not auth_file.exists():
         print("No auth.json found. Run 'codex login' first.", file=sys.stderr)
         sys.exit(1)
-    dest = f"$HOME/.codex/{name}.auth.json"
-    r = _wsl(f"cp $HOME/.codex/auth.json {dest}")
-    if r.returncode != 0:
-        print(f"Failed to save profile: {r.stderr.strip()}", file=sys.stderr)
+    dest = CODEX_HOME / f"{name}.auth.json"
+    try:
+        shutil.copyfile(auth_file, dest)
+    except OSError as e:
+        print(f"Failed to save profile: {e}", file=sys.stderr)
         sys.exit(1)
     auth = _read_auth()
     claims = _jwt_claims((auth or {}).get("tokens", {}).get("id_token", ""))
@@ -201,27 +194,29 @@ def use_profile(name: str | None):
         yield
         return
 
-    src = f"$HOME/.codex/{name}.auth.json"
-    r = _wsl(f"test -f {src} && echo ok")
-    if "ok" not in (r.stdout or ""):
+    src = CODEX_HOME / f"{name}.auth.json"
+    if not src.exists():
         print(f"Profile '{name}' not found. Use --accounts to list.", file=sys.stderr)
         sys.exit(1)
 
-    _wsl("cp $HOME/.codex/auth.json $HOME/.codex/auth.json.bak")
-    _wsl(f"cp {src} $HOME/.codex/auth.json")
+    auth_file = CODEX_HOME / "auth.json"
+    backup = CODEX_HOME / "auth.json.bak"
+    shutil.copyfile(auth_file, backup)
+    shutil.copyfile(src, auth_file)
     try:
         yield
     finally:
-        _wsl(f"cp $HOME/.codex/auth.json {src}")
-        _wsl("cp $HOME/.codex/auth.json.bak $HOME/.codex/auth.json")
-        _wsl("rm -f $HOME/.codex/auth.json.bak")
+        # Save any token refreshes back to the profile, then restore original.
+        shutil.copyfile(auth_file, src)
+        shutil.copyfile(backup, auth_file)
+        backup.unlink(missing_ok=True)
 
 
 def run_codex(prompt: str, workdir: str | None = None,
               sandbox: str | None = None, timeout: int = 1800,
               effort: str = "high",
               account: str | None = None) -> tuple[str, int, float, str]:
-    """Run codex exec via WSL and return (output, exit_code, elapsed_secs, stderr).
+    """Run codex exec natively and return (output, exit_code, elapsed_secs, stderr).
 
     Default is --yolo mode (no approvals, no sandbox) since nobody is present
     to approve prompts in non-interactive mode. Pass --sandbox to restrict.
@@ -230,44 +225,24 @@ def run_codex(prompt: str, workdir: str | None = None,
     model = resolve_model(effort)
     reasoning = preset["reasoning"]
     # Include PID so concurrent reviews launched in the same second don't
-    # share (and clobber) each other's prompt/output files.
+    # share (and clobber) each other's output files.
     ts = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
-    output_file = f"/tmp/codex_review_{ts}.md"
-    prompt_file = f"/tmp/codex_prompt_{ts}.txt"
+    output_file = Path(tempfile.gettempdir()) / f"codex_review_{ts}.md"
 
-    # Write prompt to WSL temp file (avoids shell escaping issues)
-    use_file = False
-    try:
-        subprocess.run(
-            ["wsl", "bash", "-lc", f"cat > {shlex.quote(prompt_file)}"],
-            input=prompt, capture_output=True, text=True, timeout=15,
-        )
-        use_file = True
-    except Exception:
-        pass
-
-    # Build codex exec command
-    parts = ["codex", "exec"]
+    parts = [CODEX_EXE, "exec"]
     parts.extend(["-m", model])
-    parts.extend(["-c", f"model_reasoning_effort={shlex.quote(reasoning)}"])
+    parts.extend(["-c", f"model_reasoning_effort={reasoning}"])
     parts.extend(["-c", "model_reasoning_summary=none"])
-    if use_file:
-        parts.append("-")  # read prompt from stdin (redirected from file)
+    parts.append("-")  # read prompt from stdin
     if sandbox:
         parts.extend(["-s", sandbox])
     else:
         parts.append("--yolo")
-    parts.extend(["-o", output_file])
+    parts.extend(["-o", str(output_file)])
     if workdir:
-        parts.extend(["-C", win_to_wsl(workdir)])
+        parts.extend(["-C", workdir])
     else:
         parts.append("--skip-git-repo-check")
-    if not use_file:
-        parts.append(prompt)
-
-    inner = " ".join(shlex.quote(p) for p in parts)
-    if use_file:
-        inner += f" < {shlex.quote(prompt_file)}"
 
     mode = f"sandbox: {sandbox}" if sandbox else "yolo (no approvals/sandbox)"
     print(f"Starting Codex review...", file=sys.stderr)
@@ -282,8 +257,9 @@ def run_codex(prompt: str, workdir: str | None = None,
     start = time.time()
     try:
         result = subprocess.run(
-            ["wsl", "bash", "-lic", inner],
-            capture_output=True, text=True, timeout=timeout,
+            parts, input=prompt,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = time.time() - start
@@ -291,26 +267,26 @@ def run_codex(prompt: str, workdir: str | None = None,
 
         # Recover whatever we can from the timed-out process.
         # exc.stdout/.stderr contain output captured before the kill.
-        stderr_out = (exc.stderr or "").strip()
-        partial = (exc.stdout or "").strip()
+        stderr_out = exc.stderr or b""
+        if isinstance(stderr_out, bytes):
+            stderr_out = stderr_out.decode("utf-8", errors="replace")
+        partial = exc.stdout or b""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="replace")
+        partial = partial.strip()
 
         # Try reading the -o file. Codex writes it only on TaskComplete so
         # it's usually empty after a timeout, but it's free to check.
-        if not partial:
+        if not partial and output_file.exists():
             try:
-                r = subprocess.run(
-                    ["wsl", "bash", "-lc", f"cat {shlex.quote(output_file)}"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    partial = r.stdout.strip()
+                partial = output_file.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
 
         if partial:
             print(f"  Recovered {len(partial)} chars of partial output", file=sys.stderr)
 
-        return partial, 1, elapsed, stderr_out
+        return partial, 1, elapsed, stderr_out.strip()
 
     elapsed = time.time() - start
     mins, secs = int(elapsed // 60), int(elapsed % 60)
@@ -329,15 +305,11 @@ def run_codex(prompt: str, workdir: str | None = None,
 
     # Read clean output from -o file
     response = ""
-    try:
-        r = subprocess.run(
-            ["wsl", "bash", "-lc", f"cat {shlex.quote(output_file)}"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0:
-            response = r.stdout.strip()
-    except Exception:
-        pass
+    if output_file.exists():
+        try:
+            response = output_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
 
     # Fallback to stdout if -o didn't capture
     if not response and result.stdout:
@@ -395,7 +367,7 @@ def save_review(response: str, workdir: str | None, prompt: str,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Codex CLI review wrapper (via WSL)")
+    parser = argparse.ArgumentParser(description="Codex CLI review wrapper (native Windows)")
     parser.add_argument("prompt", nargs="?", help="Review prompt (or pipe via stdin)")
     parser.add_argument("-w", "--workdir", help="Project directory (Windows path)")
     parser.add_argument("-s", "--sandbox", default=None,

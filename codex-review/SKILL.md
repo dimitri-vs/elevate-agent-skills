@@ -1,11 +1,11 @@
 ---
 name: codex-review
-description: Get an independent review from Codex CLI (OpenAI, via WSL) as a second opinion. Use after implementing features, completing plans, finishing research/analysis, or anytime an unbiased third-party perspective would help - including non-code contexts like decisions, strategies, parenting situations, financial plans, or advice quality-checks. Runs 1-5 minutes in background (longer for complex reviews). Invoke when user asks for a sanity check, second opinion, or Codex review.
+description: Get an independent review from Codex CLI (OpenAI, native Windows) as a second opinion. Use after implementing features, completing plans, finishing research/analysis, or anytime an unbiased third-party perspective would help - including non-code contexts like decisions, strategies, parenting situations, financial plans, or advice quality-checks. Runs 1-5 minutes in background (longer for complex reviews). Invoke when user asks for a sanity check, second opinion, or Codex review.
 ---
 
 # Codex Review
 
-Invoke OpenAI Codex CLI (via WSL) as an independent reviewer. Provides a "second set of eyes" from a different model to catch gaps, bugs, missed considerations, or blind spots - in code, research, or any domain where an unbiased third-party perspective adds value.
+Invoke OpenAI Codex CLI (native Windows install) as an independent reviewer. Provides a "second set of eyes" from a different model to catch gaps, bugs, missed considerations, or blind spots - in code, research, or any domain where an unbiased third-party perspective adds value.
 
 ## When to Use
 
@@ -32,7 +32,7 @@ Works for both technical and non-technical contexts. For non-code reviews, the p
 > foreground and capped at 10 minutes, while reviews can take much longer.
 > A direct `Bash` call with `run_in_background: true` has no such cap.
 
-The script is a dumb pipe — you write the full prompt, it handles the WSL/Codex plumbing.
+The script is a dumb pipe — you write the full prompt, it handles the Codex plumbing (native `codex.exe`; override the binary via `CODEX_EXE` env var).
 
 ### Correct invocation
 
@@ -57,7 +57,7 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 
 | Arg | Description |
 |-----|-------------|
-| `-w`, `--workdir` | Project directory (Windows path) — converted to WSL automatically |
+| `-w`, `--workdir` | Project directory (Windows path) |
 | `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write` |
 | `-e`, `--effort` | Review effort level: `high` (default), `xhigh`. See below |
 | `--timeout` | Seconds before abort (default: 1800 = 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
@@ -90,7 +90,7 @@ Notes:
 - **ChatGPT-account auth** (the typical setup): all three GPT-5.6 tiers (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) work under ChatGPT sign-in on Plus/Team/Pro plans — verified 2026-07-13 (Free/Go plans only get terra). Previous-gen `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` remain accepted. The floating `gpt-5-codex` alias is still NOT supported under ChatGPT auth (API-key only). `gpt-5.3-codex` and `gpt-5.2` were removed 2026-06-02.
 - **API-key auth**: the floating `gpt-5-codex` alias still resolves but OpenAI marks it deprecated (as of 2026-07). Prefer `CODEX_REVIEW_MODEL=gpt-5.6-sol` (or `-terra`) on API-key auth.
 - **New reasoning efforts (sol)**: sol supports `max` (extended chain-of-thought) and `ultra` (multi-agent subagent decomposition). The script doesn't use these — it always passes the preset's reasoning effort, so `CODEX_REVIEW_MODEL` alone can't enable them. If a review truly warrants `max`/`ultra`, edit the `EFFORT_PRESETS` dict in `review.py` for that run. `ultra` in particular consumes quota very fast (the CLI itself warns on selection).
-- **CLI version matters**: the GPT-5.6 family requires Codex CLI >= 0.144.0. The wrapper surfaces a non-blocking warning encouraging you to upgrade when your installed CLI is out of date. Run `wsl npm install -g @openai/codex@latest` to upgrade.
+- **CLI version matters**: the GPT-5.6 family requires Codex CLI >= 0.144.0. The wrapper surfaces a non-blocking warning encouraging you to upgrade when your installed CLI is out of date. To upgrade, re-run the installer from pwsh 7: `irm https://chatgpt.com/codex/install.ps1 | iex` (fails under Windows PowerShell 5.1 — the script needs pwsh).
 
 ## Writing the Review Prompt
 
@@ -106,7 +106,7 @@ This is the most common use case — after implementing a plan, check completene
 >
 > Please review what was actually implemented, how complete it is, if there are any bugs/issues, and include any other recommendations (in an Other Recommendations section) you may have. As you are exploring, if you happen to come across problems/bugs outside the scope of the plan, feel free to surface those too. Consider this a fairly open-ended task, and you are an independent third party reviewer.
 
-**Note:** Convert any Windows paths in the prompt to WSL paths (e.g., `C:\Users\<username>\.claude\plans\foo.md` becomes `/mnt/c/Users/<username>/.claude/plans/foo.md`). The `--workdir` flag is converted automatically, but paths *inside the prompt text* are not.
+**Note:** Codex runs natively on Windows — use normal Windows paths (`C:\Users\...`) both in `--workdir` and inside the prompt text. No path conversion needed.
 
 ### Code review (recent changes)
 
@@ -187,8 +187,8 @@ Profiles are stored as `~/.codex/<name>.auth.json` — alongside the main auth f
 # 1. Already logged in as agency → save it
 cd "<skill-directory>" && uv run review.py --account-setup agency
 
-# 2. Log out, log in with personal account
-wsl bash -lic "codex logout && codex login"
+# 2. Log out, log in with personal account (any shell — codex is on PATH)
+codex logout && codex login
 
 # 3. Save personal profile
 cd "<skill-directory>" && uv run review.py --account-setup personal

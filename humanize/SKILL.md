@@ -20,7 +20,7 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 
 ## Default delivery: `--open` (do NOT re-type the result)
 
-For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — **always pass `-O`/`--open`**, including when you also pass `-s` steering. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default app (Typora on this machine), printing **only the file path** to stdout. The *only* time you omit `--open` is when the output is being piped onward (e.g. `| Set-Clipboard`) or consumed by another tool.
+For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — **always pass `-O`/`--open`**, including when you also pass `-s` steering. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default `.md` handler (currently Notepad++ on this machine), printing **only the file path** to stdout. The *only* time you omit `--open` is when the output is being piped onward (e.g. `| Set-Clipboard`) or consumed by another tool.
 
 ```bash
 humanize --open --context "<what this message is>" <<'EOF'
@@ -30,7 +30,13 @@ EOF
 
 Then tell the user something brief like "Opened the humanized version — `<path>`." **Do not paste the humanized text back into the terminal.** The whole point is to avoid re-transcribing prose you already drafted: draft it silently, pipe it through `humanize --open`, and report that it's open. Never show the pre-humanized draft either — go straight to the humanized file.
 
+**Away-from-computer exception:** if remote control is active, or Dimitri says he's on mobile / away from his computer, paste the full humanized text into chat *in addition to* reporting the path — he can't see the opened editor window from his phone. The pre-humanize draft still never gets shown.
+
 Old temp files (>24h) are swept automatically on each `--open` run; no cleanup needed.
+
+## The opened file is the working copy (send contract)
+
+For outbound messages (the humanize-first default in the global CLAUDE.md), the opened temp file is the working version — Dimitri may edit and save over it, or not. **Always re-read it before sending:** "send it" = file contents as-is; "make X changes and send" = apply X on top of the file's current contents, then send. Never send from a chat-displayed or in-memory copy. Saving over the same file also feeds the [corpus flywheel](#corpus-flywheel-style-distillation-from-manual-edits) below.
 
 ## Always pass `--context`
 
@@ -53,8 +59,10 @@ The CLI is an editor: it fixes style but cannot know what you know. Detector A/B
 
 1. **Draft 20% shorter than feels complete.** Cut by deleting the weakest supporting point entirely, not by compressing every sentence — uniform density is itself an LLM signature. Complete evidence coverage reads as AI; humans leave weaker points unstated or save them for a natural follow-up message.
 2. **Ground it in the real situation.** Weave in 1-2 concrete facts from the actual session or thread: the delay being apologized for, what actually happened while testing ("the benchmark nearly crashed my machine"), the specific device or project name ("my Legion 5", not "my machine"). Only facts actually observed in the session, user memory, or the thread — never invented color.
-3. **Label epistemic status honestly.** You know which claims were verified this session and which are inference. State verified things flatly; where the draft is genuinely guessing, say so in plain words ("but this is pure speculation", "could be wrong here"). Uniform confidence across every claim is the deepest AI tell; honest unevenness is free because it's true.
+3. **Label epistemic status honestly.** You know which claims were verified this session and which are inference. State verified things flatly; where the draft is genuinely guessing, say so in plain words using Dimitri's actual constructions: "Best guess: ...", "could be wrong on the exact mechanism", "I'm guessing", "I think", a trailing "or something?" or "(crashed/stuck?)". The CLI is forbidden from inventing hedges, so uncertainty must already be in the draft — the 2026-08 corpus distillation showed adding these was one of his most frequent manual edits. Uniform confidence across every claim is the deepest AI tell; honest unevenness is free because it's true.
 4. **Commit, don't offer menus.** "I'll attach the benchmark script" beats "Happy to send the script, screenshots, or traces if useful." Pick the one thing that will actually happen.
+5. **Name the AI tooling when writing to technical teammates.** When an agent actually did the work, say so the way Dimitri does: "have Claude run an analysis on X", "you can paste this straight into Claude Code", "Codex xhigh double-check". Don't launder agent work into "I analyzed". (Client-facing drafts: only where the relationship already has that vocabulary.)
+6. **Don't over-commit on timing.** Crisp promises create obligations: prefer "ASAP" over "same day", "a week or two" over "in a week", "today or tomorrow" over a named weekday — unless a hard date is genuinely required (deadlines, contracts, quotes).
 
 ## Structural check (AFTER the CLI returns)
 
@@ -69,7 +77,7 @@ For high-stakes public posts (HN, Reddit, LinkedIn), still surface the result fo
 
 The printed path is a normal file you can edit:
 
-- **Wording tweak** the user requests ("drop the last line", "make it warmer"): `Read` the file, `Edit` it in place. Typora reloads automatically. This is a plain prose edit, not another humanize pass — no API call.
+- **Wording tweak** the user requests ("drop the last line", "make it warmer"): `Read` the file, `Edit` it in place (Notepad++ prompts to reload on focus). This is a plain prose edit, not another humanize pass — no API call.
 - **Re-humanize differently** ("do it harder", "treat as a Slack DM"): pipe the file back through, producing a fresh file and preserving the original: `cat <path> | humanize -t --open`.
 
 **Prefer a heredoc over creating a scratch file.** Anything generated in the current conversation should pipe directly via heredoc, not via a temp file you cat back. Single-quoted delimiters (`<<'EOF'`) prevent shell expansion, so apostrophes, `"quotes"`, URLs, and `$` all pass through verbatim.
@@ -198,7 +206,7 @@ Every `--open` run automatically archives three files to `~/.config/humanize/cor
 - `<stem>-tool.md` — what the tool produced
 - `<stem>-meta.json` — run parameters (context, model, heuristic level)
 
-Dimitri edits the opened temp file in place (Notepad++/Typora) and saves over it. When the 24h sweep later deletes that temp file, it first compares it against the archived `-tool.md`; if they differ, the edited version is saved as `<stem>-final.md`. A tool/final pair is a recorded example of his real editing function. Pass `--no-corpus` to skip archiving a sensitive run.
+Dimitri edits the opened temp file in place (Notepad++) and saves over it. When the 24h sweep later deletes that temp file, it first compares it against the archived `-tool.md`; if they differ, the edited version is saved as `<stem>-final.md`. A tool/final pair is a recorded example of his real editing function. Pass `--no-corpus` to skip archiving a sensitive run.
 
 **The one habit that makes this work: save edits over the same opened file.** Remind Dimitri of this if he mentions tweaking a humanized draft somewhere else.
 
@@ -206,11 +214,11 @@ Dimitri edits the opened temp file in place (Notepad++/Typora) and saves over it
 
 When Dimitri asks to "distill the humanize corpus" (or during a periodic tune-up, roughly monthly):
 
-1. List stems in `~/.config/humanize/corpus/` that have a `-final.md`.
-2. For each pair, diff `-tool.md` against `-final.md`, using `-meta.json` for register context.
-3. Cluster the recurring edit types across pairs (phrases he consistently cuts, constructions he adds, length deltas, punctuation habits). One-off content edits are noise; only patterns that appear across multiple pairs are signal.
-4. Propose concrete additions or amendments to `~/.config/humanize/style.md`, showing the evidence pairs for each. Apply on his approval.
-5. Move processed trios into `~/.config/humanize/corpus/distilled/` so the next distillation only sees fresh pairs.
+1. Generate the pair report: `uv run C:\Users\Dimitri\Code\elevate-humanizer\style-profile\corpus_report.py -o <scratchpad>\corpus-diffs.md` (word-level diff of every `-tool.md` vs `-final.md` pair with its `-meta.json` context).
+2. Cluster the recurring edit types across pairs (phrases he consistently cuts, constructions he adds, length deltas, punctuation habits). One-off content edits are noise; only patterns that appear across multiple pairs are signal. Also check `meta.json`'s `prompt_version` — a pattern seen only under an older prompt version may already be fixed.
+3. Sort each confirmed pattern into its right home: generic LLM tells go in the repo's base prompt (`prompts/base.py`, bump `PROMPT_VERSION`), personal voice goes in `~/.config/humanize/style.md`, draft-level texture only the agent can supply goes in this skill's author pass, mechanical habits go in `heuristic.py`.
+4. Propose the changes, showing the evidence pairs for each. Apply on his approval.
+5. After applying, run `corpus_report.py --mark-distilled` to move processed trios into `~/.config/humanize/corpus/distilled/` so the next distillation only sees fresh pairs. (First distillation: 2026-08-20, 53 pairs.)
 
 ## Temp-file pattern
 

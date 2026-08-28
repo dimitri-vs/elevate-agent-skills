@@ -266,3 +266,15 @@ Railway provides S3-compatible object storage ("Buckets") as a first-party servi
 
 ### Danger Zone
 - **Delete Service**: Permanently removes service and all deployments from the environment
+
+## Access Control & Security (as of 2026-08-20)
+
+Key facts for deciding who can see what (sources: docs.railway.com workspaces/project-members/variables, enterprise/access-groups):
+
+- **Workspace roles**: Admin, Member, Deployer. A **Member has access to ALL workspace projects** — including viewing/creating/modifying/deleting env vars, deploying, and creating services. **Deployer** can only view projects and deploy via GitHub commits (no CLI deploys, no variable access, no logs). There is no plain-Pro way to hide one project's env vars from a workspace Member.
+- **Project members** (Project Settings > Members, no workspace membership needed): **Owner / Editor / Viewer**. Editor can deploy and change settings but not delete services/project; **Viewer is read-only and cannot see env vars**. Pro plan = unlimited project members. This is the agency's preferred scoping pattern (see `railway-provision` skill). Caveat: project scoping only restricts people who are NOT also workspace Members — workspace role wins.
+- **Access Groups** (People > Security, Beta): admin-managed groups of people+projects+role that restrict which projects non-admin members can see (applies to dashboard, API, CLI, MCP). Gated behind **committed spend — the unlock dialog quotes $5,000/mo minimum** (verified 2026-08-20), despite docs vaguely saying "eligible committed spend plans". Not worth it below enterprise scale.
+- **Environment RBAC** (restrict e.g. production env to admins): committed spend $2,000/mo tier.
+- **Sealed variables**: per-variable "seal" makes the value write-only — still injected into builds/deploys but never visible again in UI or API, can't be unsealed, excluded from `railway variables`/`railway run`, PR environments, and env duplication. Good for tokens that only the service needs. Set via dashboard variable menu.
+- **Trusted domains** (People > Security): auto-onboards anyone signing up with a matching email domain into the workspace at a chosen role — onboarding automation, NOT a security boundary (default-role Member would grant workspace-wide var access).
+- **Workspace API tokens** authenticate as the workspace and reach every project regardless of Access Groups — treat one like a workspace admin credential; prefer project tokens for single-project integrations.
