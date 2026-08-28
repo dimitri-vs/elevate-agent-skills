@@ -1281,7 +1281,7 @@ def watch(target, thread_ref, timeout, exit_on_first, reactions, include_self):
         uv run slack_canvas.py watch "#general" --no-reactions
     """
     try:
-        from websocket import create_connection
+        from websocket import WebSocketTimeoutException, create_connection
     except ImportError:
         raise click.ClickException("websocket-client is required: run via `uv run slack_canvas.py`")
 
@@ -1322,6 +1322,13 @@ def watch(target, thread_ref, timeout, exit_on_first, reactions, include_self):
                 event = json.loads(ws.recv())
             except json.JSONDecodeError:
                 continue
+            except WebSocketTimeoutException:
+                # Just "no events in the last 30s" — the socket is still fine.
+                # Reconnecting here re-handshakes rtm.connect twice a minute on
+                # any quiet channel, which trips Slack's rate limit; the 60s
+                # backoffs that follow leave the watch deaf, and it silently
+                # misses the very message it was waiting for.
+                continue
             except Exception as exc:
                 if time.time() >= deadline:
                     break
@@ -1339,7 +1346,14 @@ def watch(target, thread_ref, timeout, exit_on_first, reactions, include_self):
             if etype == "message":
                 ev_channel = event.get("channel")
                 ev_user = event.get("user")
-                if event.get("subtype") in ("message_deleted", "message_changed"):
+                # `message_replied` is an update to the PARENT ("this message
+                # now has replies"), not the reply: no top-level user, no text,
+                # and `ts` is the parent's. Treating it as a message made
+                # --exit-on-first return a bare "[message_replied]" and stop
+                # watching before the actual reply arrived.
+                if event.get("subtype") in (
+                    "message_deleted", "message_changed", "message_replied",
+                ):
                     continue
                 if channel_id and ev_channel != channel_id:
                     continue
@@ -1347,11 +1361,17 @@ def watch(target, thread_ref, timeout, exit_on_first, reactions, include_self):
                     continue
                 if ev_user == me and not include_self:
                     continue
+                body = _message_body(event)
+                # Guard against future subtypes that behave like message_replied:
+                # an event with no author whose body is only a "[subtype]"
+                # placeholder carries nothing worth waking anyone for.
+                if ev_user is None and re.fullmatch(r"\[[a-z_]+\]", body):
+                    continue
                 name = client.resolve_users([ev_user]).get(ev_user, ev_user)
                 payload = {
                     "event": "message", "channel": ev_channel, "user": ev_user,
                     "name": name, "ts": event.get("ts"),
-                    "thread_ts": event.get("thread_ts"), "text": _message_body(event),
+                    "thread_ts": event.get("thread_ts"), "text": body,
                 }
             elif etype in ("reaction_added", "reaction_removed") and reactions:
                 item = event.get("item") or {}
