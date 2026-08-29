@@ -24,6 +24,7 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |
 | **tailwindcss-skill** | Tailwind CSS v4 fundamentals — installation, CSS-first config, design systems |
 | **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5 + web_search) and deep research (o3-deep-research) |
+| **xquik-x-research** | Xquik REST API and MCP patterns for current public X data research |
 
 ## Getting Started
 
@@ -33,7 +34,7 @@ The simplest approach — just copy a skill folder into your project:
 
 ```bash
 # Clone the repo
-git clone https://github.com/elevatecode/elevate-agent-skills.git
+git clone https://github.com/dimitri-vs/elevate-agent-skills.git
 
 # Copy a skill into your project
 cp -r elevate-agent-skills/pydantic-ai /path/to/your-project/.claude/skills/
