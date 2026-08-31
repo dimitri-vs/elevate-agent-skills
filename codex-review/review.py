@@ -53,9 +53,11 @@ CODEX_EXE = (
 #   Sol also supports "max" and "ultra" reasoning efforts; ultra spawns
 #   subagents and burns quota very fast — not used by default here.
 # - Override at runtime via CODEX_REVIEW_MODEL (applies to all effort levels).
+# Per-effort default timeout: xhigh reviews that explore data empirically
+# routinely blow past 30 min (observed 2026-08-31), so sol gets an hour.
 EFFORT_PRESETS = {
-    "high":  {"model": "gpt-5.6-terra", "reasoning": "high"},
-    "xhigh": {"model": "gpt-5.6-sol", "reasoning": "xhigh"},
+    "high":  {"model": "gpt-5.6-terra", "reasoning": "high", "timeout": 1800},
+    "xhigh": {"model": "gpt-5.6-sol", "reasoning": "xhigh", "timeout": 3600},
 }
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
@@ -373,8 +375,9 @@ def main():
     parser.add_argument("-s", "--sandbox", default=None,
                         choices=["read-only", "workspace-write"],
                         help="Use sandbox instead of default --yolo mode")
-    parser.add_argument("--timeout", type=int, default=1800,
-                        help="Timeout in seconds (default: 1800)")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Timeout in seconds (default: per effort level - "
+                             "1800 for high, 3600 for xhigh)")
     parser.add_argument("-e", "--effort", default="high",
                         choices=["high", "xhigh"],
                         help="Review effort level (default: high). "
@@ -410,9 +413,11 @@ def main():
     if not prompt:
         parser.error("Empty prompt")
 
+    timeout = args.timeout or EFFORT_PRESETS[args.effort]["timeout"]
+
     with use_profile(args.account):
         response, exit_code, elapsed, stderr = run_codex(
-            prompt, args.workdir, args.sandbox, args.timeout, args.effort,
+            prompt, args.workdir, args.sandbox, timeout, args.effort,
             account=args.account,
         )
 

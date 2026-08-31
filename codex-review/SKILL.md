@@ -21,7 +21,7 @@ Works for both technical and non-technical contexts. For non-code reviews, the p
 
 **Reviews take 1-5 minutes at default effort. Use the `Bash` tool directly with `run_in_background: true`.**
 
-> **CRITICAL — Bash timeout:** The script's internal safety timeout is 30 minutes.
+> **CRITICAL — Bash timeout:** The script's internal safety timeout is 30 minutes for `high`, 60 minutes for `xhigh`.
 > The Bash tool's own timeout must be **at least** as long, or the Bash wrapper
 > kills the process first and all output is lost. Always use `run_in_background: true`
 > (no timeout cap) instead of setting a fixed `timeout` value.
@@ -60,7 +60,7 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 | `-w`, `--workdir` | Project directory (Windows path) |
 | `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write` |
 | `-e`, `--effort` | Review effort level: `high` (default), `xhigh`. See below |
-| `--timeout` | Seconds before abort (default: 1800 = 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
+| `--timeout` | Seconds before abort (default: per effort - 1800 for `high`, 3600 for `xhigh`; empirical data-exploration xhigh reviews were observed blowing past 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
 | `--no-save` | Skip saving to ~/reviews/ |
 | `--accounts` | List available auth profiles and show which is active |
 | `--account-setup NAME` | Save current Codex login as a named profile |
@@ -75,7 +75,7 @@ Default is `high`, which is good for most reviews. Escalate to `xhigh` only when
 | Effort | Model | Reasoning | Typical time | Use when |
 |--------|-------|-----------|--------------|----------|
 | `high` | gpt-5.6-terra | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
-| `xhigh` | gpt-5.6-sol | xhigh | 5-20 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
+| `xhigh` | gpt-5.6-sol | xhigh | 5-40 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
 
 ### Model selection
 
