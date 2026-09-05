@@ -184,6 +184,24 @@ urllib.request.urlopen(urllib.request.Request(
 
 Send ntfy on every run (success count or "all clear") so silence = something broke.
 
+### Re-entry footer (shared component, added 2026-09-05)
+
+Any routine that stages a decision for Dimitri (approvals, a draft to polish) must make it trivial to drop back into *that run's* session. Every Desktop routine run is a normal Claude Code session: its transcript is `~/.claude/projects/<cwd-slug>/<uuid>.jsonl`, the Desktop index (`%APPDATA%\Claude\claude-code-sessions\<acct>\<org>\local_<id>.json`) maps `scheduledTaskId` -> `cliSessionId`, and the routine reads its own id from `$CLAUDE_CODE_SESSION_ID` in any Bash step. `claude --resume <uuid>` works from any directory (verified 2026-09-05).
+
+Use the shared helper instead of hand-rolling the email send:
+
+```python
+sys.path.insert(0, r"C:\Users\Dimitri\scripts\routine-common")
+from reentry import send_email, ntfy, session_id
+send_email(profile="business", to=..., subject=..., html_body=...,
+           reentry={"sid": session_id(), "cwd": str(ROOT), "routine": "<id>",
+                    "prompt": "review the proposals with me and apply what I approve"})
+```
+
+The footer renders the exact `claude -r <uuid> "<prompt>"` command in monospace, the sentence "or open this run under Scheduled in the Desktop sidebar", and the documented `claude-cli://open?cwd=...&q=%2Fresume%20<uuid>` deep link as text (Gmail strips custom URL schemes from links). Documented-but-not-built: a tiny https hop page that fires the scheme so the email gets a real button; and `claude://resume?uuid=<cliSessionId>` (undocumented, in the Desktop bundle, untested). Phone path v2: extend `scripts\claude-rc-listener.ps1` to accept `resume:<uuid>`. Details in the module docstring of `reentry.py`.
+
+Pair the footer with a **staging convention** so the resumed session can act: number the proposals in the email and in the routine's durable record (e.g. a `### PROPOSED (rung 3) - awaiting Dimitri` section in a REVIEW_LOG entry), so "approve 1 and 3" is unambiguous.
+
 ## Maintenance: Monthly Tune-Up
 
 Every routine should get a periodic review. Check:
