@@ -116,7 +116,7 @@ Routines are scheduled via the Desktop app's Routines page.
   "filePath": "...\\scheduled-tasks\\<name>\\SKILL.md", "cwd": "...", "useWorktree": false}]}
 ```
 
-Permission mode is NOT stored in this file — verify "Act without asking" in the UI itself.
+`permissionMode` ("bypassPermissions" = Act without asking), `model` (e.g. `claude-opus-5[1m]`; `[1m]` = the 1M-context variant, same price under 200K tokens) and `displayName` (a human label; the `id` stays the folder name) are all optional keys on the same entry (schema verified in the Desktop bundle 2026-09-06). Entries created from the UI often omit `model`, and a routine then inherits whatever its previous run used, so set it explicitly. Bulk edits: quit Desktop, edit the JSON, relaunch.
 
 **Setting the schedule:** Use the "Custom" option in the schedule dropdown to enter a raw cron expression. Standard 5-field cron in local time: `minute hour day-of-month month day-of-week`.
 
@@ -127,7 +127,7 @@ Common patterns:
 
 **Permission mode:** Set to "Act without asking" for unattended runs.
 
-**Model:** Use `claude-opus-4-8[1m]` for routines that process large data (100+ candidates). Smaller routines can use the default.
+**Model:** set `claude-opus-5[1m]` on every routine (decision 2026-09-06: all routines at least Opus 5). The `[1m]` suffix selects the 1M-context variant; it costs the same until a run exceeds 200K tokens, so there is no reason to omit it.
 
 **Working directory:** Set to the project directory (e.g., `C:\Users\Dimitri\Code\<routine-name>`).
 
