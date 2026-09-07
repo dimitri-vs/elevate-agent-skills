@@ -210,14 +210,14 @@ Every routine should get a periodic review. Check:
 2. **False positive rate** - review the last 4 triage.md files. If >80% of candidates are being cut, tighten the collection queries.
 3. **False negative risk** - are there mentions you know about that the routine missed? Add sources or adjust queries.
 4. **SKILL.md drift** - compare the live `~/.claude/scheduled-tasks/<name>/SKILL.md` with the documented mirror in the repo. Sync if they've diverged.
-5. **Cost check** - review API usage (SearchAPI.io dashboard, OpenAI usage page). Adjust query count if overspending.
+5. **Cost check** - review API usage (Firecrawl dashboard, OpenAI usage page). Adjust query count if overspending.
 
 ## Common Pitfalls
 
 - **Shell env shadowing .env:** Always use `load_dotenv(override=True)`. Without `override`, existing shell variables win and you get stale keys.
 - **Substring matching for editorial judgment:** Don't use regex or `in` checks for classification that requires context. "elevate code quality" matches "elevate code" but isn't about the company. Let the agent decide.
 - **Unscoped Reddit searches:** Reddit's `/search.json` is site-wide. Use `/r/{subreddit}/search.json` with `restrict_sr=true` to avoid noise from unrelated subreddits.
-- **Google News time_period param:** SearchAPI.io's `google_news` engine uses `tbs` for time filtering (same as regular Google), not `time_period`.
+- **Firecrawl search time windows:** `POST /v2/search` takes Google-style `tbs` (`qdr:d`, `qdr:w`, `qdr:m`, `qdr:y`) for recency filtering; there is no `time_period` param. Size the window to the routine cadence (see brand-patrol's `--days` mapping).
 - **Overly broad search queries for promo/opportunity scanning:** Broad queries like "Windows speech to text" match anything with those common words. Scope to relevant subreddits AND require intent signals (help, recommend, alternative, looking for).
 - **Not saving full LLM responses:** When probing LLMs for brand mentions, save the complete response text - truncating to excerpts makes false positives unauditable.
 - **Desktop rewrites scheduled-tasks.json on exit:** If you need to hand-edit this file, quit the Desktop app first (verified working 2026-07-27: quit → edit `cronExpression` → relaunch; the app reads the file at startup). Reading while the app runs is safe. Prefer the Desktop UI's "Custom" cron option when the user is driving.
