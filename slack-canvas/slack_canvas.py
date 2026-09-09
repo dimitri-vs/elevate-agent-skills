@@ -1455,6 +1455,21 @@ def _upload_files(client: SlackClient, channel_id: str, paths: tuple[str, ...],
     return client.api("files.completeUploadExternal", **params)
 
 
+_MENTION_RE = re.compile(r"(?:<|&lt;)@([UW][A-Z0-9]+)\|[^>&]*(?:>|&gt;)")
+
+
+def _normalize_mentions(text: str) -> str:
+    """Rewrite `<@UID|label>` mentions to the bare `<@UID>` form Slack renders.
+
+    Slack's labeled form is deprecated and silently fails when the label has a
+    space (`<@U123|clayton bell>` posts as literal text, HTML-escaped to
+    `&lt;@U123|clayton bell&gt;`), while `<@U123|oz>` happens to work. Only the
+    bare form is reliable, so both shapes are normalized before send/edit.
+    (Bit on 2026-09-09: two #wins-public posts landed with raw mention markup.)
+    """
+    return _MENTION_RE.sub(r"<@>", text) if text else text
+
+
 @cli.command()
 @click.argument("target")
 @click.option("--text", "-m", help="Message text (markdown-ish Slack mrkdwn)")
@@ -1488,6 +1503,7 @@ def send(target, text, text_file, thread_ref, attach, unfurl, dry_run, as_json):
         text = f"{text}\n\n{file_text}" if text else file_text
     if not text and not attach:
         raise click.ClickException("Nothing to send: pass --text/-m, --file/-f, or --attach/-a")
+    text = _normalize_mentions(text)
 
     channel_id = resolve_channel_id(client, target)
     thread_ts = _resolve_thread_ts(thread_ref)
@@ -1533,6 +1549,93 @@ def send(target, text, text_file, thread_ref, attach, unfurl, dry_run, as_json):
         click.echo(json.dumps(payload))
     else:
         click.echo(f"Sent to {channel_id} (ts {ts})")
+
+
+@cli.command()
+@click.argument("message")
+@click.option("--text", "-m", help="New full message text (Slack mrkdwn)")
+@click.option("--file", "-f", "text_file", type=click.Path(exists=True, dir_okay=False),
+              help="New full message text from a file")
+@click.option("--sub", "subs", nargs=2, multiple=True, metavar="OLD NEW",
+              help="Replace OLD with NEW inside the current text (repeatable); "
+                   "combines with the current message, not with -m/-f")
+@click.option("--channel", "-c", "channel_opt",
+              help="Channel ID when MESSAGE is a bare ts instead of a URL")
+@click.option("--dry-run", is_flag=True, help="Show current and new text, change nothing")
+@click.option("--json", "as_json", is_flag=True, help="Emit the result as JSON")
+def edit(message, text, text_file, subs, channel_opt, dry_run, as_json):
+    """Edit one of YOUR existing messages in place (chat.update).
+
+    MESSAGE is a message URL (…/archives/C…/p1788963393531279) or a bare ts
+    with --channel. Reactions, thread replies and the original timestamp are
+    kept - use this instead of delete-and-repost once anyone has reacted.
+    Only messages posted by the token's own user can be edited.
+
+    
+    Examples:
+        uv run slack_canvas.py edit <url> -f fixed.md
+        uv run slack_canvas.py edit <url> --sub "its" "it's" --sub "Fantastic." "Fantastic!"
+        uv run slack_canvas.py edit 1788963393.531279 -c C08RGJP59CM -m "new text" --dry-run
+    """
+    client = SlackClient()
+
+    message = message.strip()
+    if message.startswith("http"):
+        parsed = parse_slack_url(message)
+        if parsed.get("type") != "thread" or not parsed.get("channel"):
+            raise click.ClickException(f"Not a message URL: {message}")
+        channel_id, ts = parsed["channel"], parsed["ts"]
+    elif re.match(r"^\d{10}\.\d{1,8}$", message):
+        if not channel_opt:
+            raise click.ClickException("A bare ts needs --channel/-c")
+        channel_id, ts = resolve_channel_id(client, channel_opt), message
+    else:
+        raise click.ClickException(f"MESSAGE must be a message URL or a ts, got: {message}")
+
+    hist = client.api("conversations.history", channel=channel_id, latest=ts, oldest=ts,
+                      inclusive=True, limit=1)
+    msgs = hist.get("messages") or []
+    if not msgs or msgs[0].get("ts") != ts:
+        raise click.ClickException(f"Message {ts} not found in {channel_id}")
+    current = msgs[0].get("text", "")
+
+    if text_file:
+        with open(text_file, encoding="utf-8") as f:
+            text = f.read().strip()
+    if text and subs:
+        raise click.ClickException("Use either -m/-f (replace) or --sub (patch), not both")
+    if subs:
+        new_text = current
+        for old, new in subs:
+            if old not in new_text:
+                raise click.ClickException(f"--sub: {old!r} not found in the current text")
+            new_text = new_text.replace(old, new)
+    elif text:
+        new_text = text
+    else:
+        raise click.ClickException("Nothing to change: pass -m, -f, or --sub OLD NEW")
+    new_text = _normalize_mentions(new_text)
+
+    if dry_run:
+        if as_json:
+            click.echo(json.dumps({"dry_run": True, "channel": channel_id, "ts": ts,
+                                   "current": current, "new": new_text}))
+            return
+        click.echo(f"[dry-run] channel={channel_id} ts={ts}")
+        click.echo("--- current ---")
+        click.echo(current)
+        click.echo("--- new ---")
+        click.echo(new_text)
+        return
+    if new_text == current:
+        click.echo("No change - message already matches.")
+        return
+
+    result = client.api("chat.update", channel=channel_id, ts=ts, text=new_text)
+    if as_json:
+        click.echo(json.dumps({"ok": True, "channel": channel_id, "ts": result.get("ts", ts)}))
+    else:
+        click.echo(f"Edited {channel_id} ts {ts}")
 
 
 @cli.command("download")

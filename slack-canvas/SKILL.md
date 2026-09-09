@@ -22,6 +22,7 @@ authenticate as, and which commands they unlock.
 | `thread <url\|-c CH -t TS>` | Fetch a thread (parent + replies) |
 | `history <target>` | Channel/DM history; **thread replies included by default** |
 | `send <target>` | Post a message **as the user** |
+| `edit <url\|ts -c CH>` | Edit one of the user's messages in place (keeps reactions/replies) |
 | `watch [target]` | Real-time monitor for new messages and reactions |
 | `download <id|url>` | Save attachments locally (images, PDFs, any file) |
 | `read <canvas>` | Canvas content as markdown |
@@ -164,6 +165,42 @@ uv run slack_canvas.py send "@sam" -m "..." --dry-run       # preview, sends not
   multi-line, and it pairs directly with the `humanize` workflow's temp file.
 - `-a/--attach` is repeatable.
 - `--dry-run` prints the resolved channel and body without sending.
+
+### Formatting: the body is sent verbatim as Slack mrkdwn, not Markdown
+
+The CLI does **no** Markdown conversion — what's in the file is what Slack
+gets, and Slack's `chat.postMessage` speaks its own *mrkdwn* dialect. Draft
+in mrkdwn or it renders literally:
+
+| Want | Write | NOT |
+|---|---|---|
+| bold / italic / strike | `*bold*` `_italic_` `~strike~` | `**bold**` (renders as literal asterisks) |
+| quote | `> line` (each quoted line prefixed) | — |
+| code | `` `inline` `` / ```` ```block``` ```` | indented blocks |
+| link with label | `<https://url\|label>` | `[label](url)` |
+| @mention | `<@U03BQ7VAG56>` — **bare ID only** | `@name`, `<@UID\|name>` |
+| #channel | `<#C08RGJP59CM>` | `#wins-public` (plain text, no link) |
+| headers / lists | not supported — use bold lines and `•` / `-` text | `## Heading`, `1.` |
+
+**Mentions (bit 2026-09-09):** the labeled `<@UID|label>` form is deprecated.
+It happens to work when the label has no space (`<@U08P5F5UEKZ|oz>`) and
+silently fails when it does (`<@U03BQ7VAG56|clayton bell>` posts as literal
+text, stored HTML-escaped as `&lt;@…&gt;`). `send` and `edit` now normalize
+both shapes to the bare `<@UID>` automatically, but draft with the bare form
+anyway. Get IDs from `history` output or `slack_search_users` (Slack MCP).
+
+### Editing a sent message
+
+```bash
+uv run slack_canvas.py edit <message-url> -f fixed.md                    # replace the body
+uv run slack_canvas.py edit <message-url> --sub "its" "it's"             # patch in place (repeatable)
+uv run slack_canvas.py edit 1788963393.531279 -c C08RGJP59CM -m "…" --dry-run
+```
+
+`chat.update` keeps the ts, reactions, and thread replies — once anyone has
+reacted, edit rather than delete-and-repost. `--sub` patches the *current*
+text (fails loudly if OLD isn't found); `-m`/`-f` replace it. Only the user's
+own messages can be edited. `--dry-run` prints current vs new.
 
 **Identifying as an agent:** because these post as the user, say so when the
 recipient should know. The user will often ask for this explicitly ("start with
