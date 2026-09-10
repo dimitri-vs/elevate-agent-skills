@@ -179,6 +179,7 @@ The three flags are mutually exclusive.
 | `--no-structural` | off | Skip the structural gate entirely. |
 | `--no-tell-pass` | off | Skip the lexical tell pass: a span lint on the rewrite (counted-list preambles, rhetorical setups, contrastives, punchy metaphor verbs, injected idioms, engagement closers) plus one extra low-temperature call that edits exactly those spans. On by default; costs a few seconds. |
 | `--lint` | off | No LLM call: print the tell spans in the input and exit 1 if any are actionable. Run it on a hand-edited draft before posting (`humanize --lint < draft.md`). |
+| `--voice` | off | Extra pass that re-voices the rewrite into Dimitri's own style from the distilled stylometry profile plus six real samples; content locked, reverted if length drifts past 20% or an anchor is lost. Experimental, adds ~10 s; use with `-r` so the right register profile loads. |
 | `-s, --steering TEXT` | none | Extra steering rules appended to the prompt. Only pass when the user gives explicit direction (e.g. "this is a Twitter post") or specific constraints. Do not add agent-decided steering - the tool runs well without it. |
 | `-c, --context TEXT` | none | Short description of what the message is (Slack thread reply, cold outreach, etc.). **Pass this every run** — it drives register and greeting. See [Always pass --context](#always-pass---context). |
 | `-t, --heuristic-texture` | — | Force heavy heuristic intensity |
