@@ -18,6 +18,18 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 > **Bash timeout:** Default model is now Sonnet 4.6 (fast, ~15-30s for most inputs). For long inputs (1000+ words), set `timeout: 300000` or use `run_in_background: true`. Pass `-m claude-opus-4-7` for maximum quality on high-stakes content (slower, 1-3 min).
 > - **If Claude Code's Bash display truncates the output** (appears empty after a long run), re-run redirecting to `/tmp/humanize/out.md` and `cat` the file (see [Temp-file pattern](#temp-file-pattern) below).
 
+## Routing: which mode (decide this first)
+
+Two modes, chosen by what the text is and where it goes. Measured against the Pangram 4 detector on 2026-09-10 (details in the elevate-humanizer repo CLAUDE.md):
+
+| Situation | Mode | Why |
+|---|---|---|
+| Everyday: Slack, email, Basecamp, client updates. Text drafted by Claude. | **Default pass** (`humanize --open -c "..."`). Add `-r business` / `-r personal` when obvious. | Strips the tells human readers notice and fixes the skeleton (paragraph length, anaphora, semicolons, closers) against Dimitri's own baseline. Short messages under ~70 words often pass detectors outright; anything longer that Claude composed will still read as AI to a classifier, and that is accepted for this tier. |
+| High stakes: Hacker News, Reddit, anywhere an "AI-edited" flag costs reputation. **Dimitri wrote or dictated the text himself.** | **Tidy pass** (`humanize --tidy -c "..."`). | Typos, punctuation and speech-to-text slips only. No rewrite, no exemplars, no injected typos; reverts to the input if the model changed more than ~20% of the words. The only mode measured to keep a Human verdict: his dictation scored 0.03, a full rewrite of the same words 0.98. |
+| High stakes, but the draft was composed by Claude. | **No passing mode exists.** Say so. | Every rewrite strategy tested (any frontier model, any prompt, base-model paraphrasing, note formats, mechanical corruption) scored ~1.00 AI at 150+ words. Offer the workable path instead: Dimitri dictates or types the post in his own words (a rough voice memo transcript is enough), then `--tidy`. Claude can supply a fact list or outline for him to speak from, never the prose. |
+
+Do not "upgrade" a high-stakes Claude draft by running it through the default pass twice, with Opus, or with heavy texture; none of that moves a detector. Do not pass Claude-composed text through `--tidy`; it will not help and the similarity guard may reject it.
+
 ## Default delivery: `--open` (do NOT re-type the result)
 
 For the common interactive case — the user asked you to draft a message and humanize it, or to humanize text you just generated — **always pass `-O`/`--open`**, including when you also pass `-s` steering. The CLI writes the humanized result to a self-cleaning temp file and launches it with the OS default `.md` handler (currently Notepad++ on this machine), printing **only the file path** to stdout. The *only* time you omit `--open` is when the output is being piped onward (e.g. `| Set-Clipboard`) or consumed by another tool.
@@ -40,15 +52,14 @@ For outbound messages (the humanize-first default in the global CLAUDE.md), the 
 
 ## Always pass `--context`
 
-The humanizer cannot see what kind of message it's rewriting — it only gets the text. So **always pass `-c`/`--context` with a few words describing the situation.** This drives register, formality, and especially greetings: by default the humanizer drops the greeting, and only keeps one when the context says it's an initial/cold outreach.
+The humanizer cannot see what kind of message it's rewriting — it only gets the text. So **always pass `-c`/`--context`, and make it a short paragraph, not a label.** Cover four things: what the message is, who reads it, what they already know, and what the message has to accomplish. The prompt uses this to decide what to cut, which is where most of the excess length in a draft lives; a bare "Slack reply" only sets the register and greeting (by default the humanizer drops the greeting, and only keeps one when the context says it's an initial/cold outreach).
 
 This is distinct from `-s`/`--steering` (explicit rules, passed rarely). Context is a situational description, passed every time. Examples:
 
 ```bash
-humanize --open --context "Slack thread reply to a teammate" <<'EOF' ... EOF
-humanize --open --context "cold outreach email to a prospect" <<'EOF' ... EOF
-humanize --open --context "Basecamp reply, ongoing thread, non-technical client" <<'EOF' ... EOF
-humanize --open --context "reply in an existing email thread" <<'EOF' ... EOF
+humanize --open --context "Slack thread reply to a teammate who asked whether the deploy is blocked. She already knows the staging bug from yesterday's thread; she needs a yes/no and the ETA." <<'EOF' ... EOF
+humanize --open --context "Cold outreach email to an ecommerce founder who has never heard of us. Goal is one reply, not a pitch; keep the greeting." <<'EOF' ... EOF
+humanize --open --context "Basecamp reply in an ongoing thread with a non-technical client. He has the full history; this only needs to confirm the scope change and the new date." <<'EOF' ... EOF
 ```
 
 If you genuinely can't tell, default to describing it as a reply in an ongoing thread — that's the common case and the safer assumption (no greeting).
@@ -161,6 +172,13 @@ The three flags are mutually exclusive.
 
 | Flag | Default | Purpose |
 |---|---|---|
+| `--tidy` | off | Light copyedit only, for text Dimitri wrote or dictated. See [Routing](#routing-which-mode-decide-this-first). |
+| `-r, --register {reddit,personal,business}` | none | Which slice of Dimitri's own writing to compare against and draw exemplars from. |
+| `--exemplars N` | 3 | Real (PII-scrubbed) samples of his writing injected into the prompt. `0` disables. |
+| `--structural-retries N` | 0 | Extra LLM calls when the structural gate still flags the output. Only for pieces where a few more seconds are worth it. |
+| `--no-structural` | off | Skip the structural gate entirely. |
+| `--no-tell-pass` | off | Skip the lexical tell pass: a span lint on the rewrite (counted-list preambles, rhetorical setups, contrastives, punchy metaphor verbs, injected idioms, engagement closers) plus one extra low-temperature call that edits exactly those spans. On by default; costs a few seconds. |
+| `--lint` | off | No LLM call: print the tell spans in the input and exit 1 if any are actionable. Run it on a hand-edited draft before posting (`humanize --lint < draft.md`). |
 | `-s, --steering TEXT` | none | Extra steering rules appended to the prompt. Only pass when the user gives explicit direction (e.g. "this is a Twitter post") or specific constraints. Do not add agent-decided steering - the tool runs well without it. |
 | `-c, --context TEXT` | none | Short description of what the message is (Slack thread reply, cold outreach, etc.). **Pass this every run** — it drives register and greeting. See [Always pass --context](#always-pass---context). |
 | `-t, --heuristic-texture` | — | Force heavy heuristic intensity |
