@@ -64,6 +64,18 @@ humanize --open --context "Basecamp reply in an ongoing thread with a non-techni
 
 If you genuinely can't tell, default to describing it as a reply in an ongoing thread — that's the common case and the safer assumption (no greeting).
 
+## Give it what the reader has already read (`--ref`)
+
+The rewrite's most common failure is length: it keeps sentences that restate what the reader already knows, because it cannot see what they know. When the message answers a document, pass that document with `--ref FILE` (up to two): the blog post a Hacker News comment replies to, the email thread being answered, the proposal or spec a status update reports against, the client's own message being replied to. Save it to a temp file first if it only exists in the conversation.
+
+```bash
+humanize --open -r reddit --voice --ref ./article.md --context "Reply comment on HN by the post's author; readers have read the post and several think the author is gaming companies..." <<'EOF'
+...
+EOF
+```
+
+Recommended full invocation for anything public or client-facing: paragraph `--context` + `--ref` for the source document + `-r` register + `--voice`. For a quick internal Slack reply, `--context` alone is enough.
+
 ## Author pass (do this BEFORE calling the CLI)
 
 The CLI is an editor: it fixes style but cannot know what you know. Detector A/B testing (2026-07, Pangram 3.3.2) showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" — author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
@@ -179,7 +191,8 @@ The three flags are mutually exclusive.
 | `--no-structural` | off | Skip the structural gate entirely. |
 | `--no-tell-pass` | off | Skip the lexical tell pass: a span lint on the rewrite (counted-list preambles, rhetorical setups, contrastives, punchy metaphor verbs, injected idioms, engagement closers) plus one extra low-temperature call that edits exactly those spans. On by default; costs a few seconds. |
 | `--lint` | off | No LLM call: print the tell spans in the input and exit 1 if any are actionable. Run it on a hand-edited draft before posting (`humanize --lint < draft.md`). |
-| `--voice` | off | Extra pass that re-voices the rewrite into Dimitri's own style from the distilled stylometry profile plus six real samples; content locked, reverted if length drifts past 20% or an anchor is lost. Experimental, adds ~10 s; use with `-r` so the right register profile loads. |
+| `--voice` | off | Extra pass that re-voices the rewrite into Dimitri's own style from the distilled stylometry profile plus six real samples; content locked, reverted if length drifts past 20% or an anchor is lost. Blind-judged 2026-09-10: a small, consistent gain ("a little more my style"), never a loss. Use it on anything public or client-facing; skip it on internal one-liners. Pair with `-r`. |
+| `--ref FILE` | none | A file the reader has ALREADY read: the article a comment replies to, the thread an email answers, the spec a status update reports against. Repeatable, max two, ~24k chars each. The rewrite uses it to cut what the reader already knows and to keep facts consistent with the source. Pass it whenever such a document exists; it is the single biggest lever on length. |
 | `-s, --steering TEXT` | none | Extra steering rules appended to the prompt. Only pass when the user gives explicit direction (e.g. "this is a Twitter post") or specific constraints. Do not add agent-decided steering - the tool runs well without it. |
 | `-c, --context TEXT` | none | Short description of what the message is (Slack thread reply, cold outreach, etc.). **Pass this every run** — it drives register and greeting. See [Always pass --context](#always-pass---context). |
 | `-t, --heuristic-texture` | — | Force heavy heuristic intensity |
