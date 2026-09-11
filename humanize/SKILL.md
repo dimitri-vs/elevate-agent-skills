@@ -78,14 +78,35 @@ Recommended invocation for anything public or client-facing: paragraph `--contex
 
 ## Author pass (do this BEFORE calling the CLI)
 
-The CLI is an editor: it fixes style but cannot know what you know. Detector A/B testing (2026-07, Pangram 3.3.2) showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" — author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
+The CLI is an editor: it fixes style but cannot know what you know. Detector A/B testing (2026-07, Pangram 3.3.2) showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" - author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
 
-1. **Draft 20% shorter than feels complete.** Cut by deleting the weakest supporting point entirely, not by compressing every sentence — uniform density is itself an LLM signature. Complete evidence coverage reads as AI; humans leave weaker points unstated or save them for a natural follow-up message.
-2. **Ground it in the real situation.** Weave in 1-2 concrete facts from the actual session or thread: the delay being apologized for, what actually happened while testing ("the benchmark nearly crashed my machine"), the specific device or project name ("my Legion 5", not "my machine"). Only facts actually observed in the session, user memory, or the thread — never invented color.
-3. **Label epistemic status honestly.** You know which claims were verified this session and which are inference. State verified things flatly; where the draft is genuinely guessing, say so in plain words using Dimitri's actual constructions: "Best guess: ...", "could be wrong on the exact mechanism", "I'm guessing", "I think", a trailing "or something?" or "(crashed/stuck?)". The CLI is forbidden from inventing hedges, so uncertainty must already be in the draft — the 2026-08 corpus distillation showed adding these was one of his most frequent manual edits. Uniform confidence across every claim is the deepest AI tell; honest unevenness is free because it's true.
-4. **Commit, don't offer menus.** "I'll attach the benchmark script" beats "Happy to send the script, screenshots, or traces if useful." Pick the one thing that will actually happen.
-5. **Name the AI tooling when writing to technical teammates.** When an agent actually did the work, say so the way Dimitri does: "have Claude run an analysis on X", "you can paste this straight into Claude Code", "Codex xhigh double-check". Don't launder agent work into "I analyzed". (Client-facing drafts: only where the relationship already has that vocabulary.)
-6. **Don't over-commit on timing.** Crisp promises create obligations: prefer "ASAP" over "same day", "a week or two" over "in a week", "today or tomorrow" over a named weekday — unless a hard date is genuinely required (deadlines, contracts, quotes).
+1. **Count the words, then cut to the budget.** Run `wc -w` on the draft before it goes near the CLI. The CLI removes about 14% and no more (corpus median tool/input 0.86, n=414 runs), so whatever you hand it is roughly what Dimitri gets. These are the lengths he actually sends, measured across 387 real messages (2026-07-22 to 2026-09-11; study in the elevate-humanizer repo notes):
+
+   | Message type | Aim for | Hard cap |
+   |---|---|---|
+   | Slack / Basecamp / Discord / Upwork reply to a client | 90 | 150 |
+   | Internal Slack DM or team channel post | 70 | 120 |
+   | Reply in an existing email thread | 100 | 150 |
+   | Weekly or status update email | 150 | 200 |
+   | First-contact or cold outreach email | 120 | 200 |
+   | Civic or volunteer email | 150 | 190 |
+   | Consumer claim, vendor dispute, anything formal | 200 | 330 |
+   | Public post (LinkedIn, Reddit, HN, Google Business Profile) | 150 | 300 |
+   | SMS | 50 | 80 |
+
+   Draft to the **aim**, not the cap. Over the aim, delete a whole point; do not compress every sentence, because uniform density is itself an LLM signature. Cut in this order, which is the order he deletes in (measured over 252 of his edits): the explanation of why you did it that way, reassurance he did not ask for, the second ask riding along with the first, the promise of what you will do next, then any sentence the thread already carries. Numbers and links survive - he cuts prose and keeps data. Leave room for one sentence of actual opinion ("my worry is...", a direct question); that is what he most often adds back. A cap breach is a decision you state in one line when you report the file, not a default. Pass the budget to the CLI too: `-s "Target: N words or fewer."` (named numbers move the model where the standing "shorter" rule does not).
+
+2. **"Make it shorter" means half, not a fifth.** Across the 24 messages he sent back for another pass, what he ended up sending was 0.63x the first draft (IQR 0.47-0.78). Use `humanize --edit <path> -s "about half as long" --open` (see Iterating on an opened result); never hand-edit the opened file.
+
+3. **Ground it in the real situation.** Weave in 1-2 concrete facts from the actual session or thread: the delay being apologized for, what actually happened while testing ("the benchmark nearly crashed my machine"), the specific device or project name ("my Legion 5", not "my machine"). Only facts actually observed in the session, user memory, or the thread - never invented color.
+
+4. **Label epistemic status honestly.** You know which claims were verified this session and which are inference. State verified things flatly; where the draft is genuinely guessing, say so in plain words using Dimitri's actual constructions: "Best guess: ...", "could be wrong on the exact mechanism", "I'm guessing", "I think", a trailing "or something?" or "(crashed/stuck?)". The CLI is forbidden from inventing hedges, so uncertainty must already be in the draft - the 2026-08 corpus distillation showed adding these was one of his most frequent manual edits. Uniform confidence across every claim is the deepest AI tell; honest unevenness is free because it's true.
+
+5. **Commit, don't offer menus.** "I'll attach the benchmark script" beats "Happy to send the script, screenshots, or traces if useful." Pick the one thing that will actually happen.
+
+6. **Name the AI tooling when writing to technical teammates.** When an agent actually did the work, say so the way Dimitri does: "have Claude run an analysis on X", "you can paste this straight into Claude Code", "Codex xhigh double-check". Don't launder agent work into "I analyzed". (Client-facing drafts: only where the relationship already has that vocabulary.)
+
+7. **Don't over-commit on timing.** Crisp promises create obligations: prefer "ASAP" over "same day", "a week or two" over "in a week", "today or tomorrow" over a named weekday - unless a hard date is genuinely required (deadlines, contracts, quotes).
 
 ## Structural check (AFTER the CLI returns)
 
