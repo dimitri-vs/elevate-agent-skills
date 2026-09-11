@@ -60,6 +60,16 @@ source edit look like `[CONFLICT]` instead of `[BEHIND]`, which pushes toward
 2. **Sync to projects**: `python skill-sync.py sync`
 3. **Commit both repos** if the target project is a separate git repo
 
+## Codex CLI Support
+
+Codex reads the **same physical files** as Claude Code: `~/.agents/skills/<name>` is a directory junction into `~/.claude/skills/<name>`. So a `skill-sync.py sync` is live in Codex immediately - there is no Codex-specific sync to build.
+
+- **New skill name** needs its junction created once:
+  `New-Item -ItemType Junction -Path "$HOME\.agents\skills\<name>" -Target "$HOME\.claude\skills\<name>"`
+- **Never** register `~/.agents/skills` as a skill-sync target. Copies there are invisible to both the repo and the junction - that caused a silent drift Jun-Aug 2026.
+- **Invocation is `$skill-name`**, not `/skill-name`. `/` only lists Codex built-ins and will never autocomplete a skill, which is the usual "my synced skill is missing" false alarm.
+- **Don't junction Claude-bound skills** - ones that walk Claude session JSONLs, edit Desktop routines, need a Claude-only MCP, or assume subagent fan-out (Codex has none).
+
 ## Local / Private Skills
 
 The `local/` directory is gitignored and holds skills with personal or proprietary content. `skill-sync.py` scans both root and `local/` automatically — local skills show a `[local]` tag in `list` output and sync identically to public ones.
@@ -84,3 +94,4 @@ Recovery from an accidental `--force` requires mining Claude Code session JSONL 
 1. Create directory: `<skill-name>/` (or `local/<skill-name>/` for private skills)
 2. Add `SKILL.md` with frontmatter (`name`, `description`)
 3. Register: `python skill-sync.py add <skill-name> --to "..."`
+4. Global skill that should reach Codex? Add its junction once - see [Codex CLI Support](#codex-cli-support).

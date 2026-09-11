@@ -20,15 +20,17 @@ If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC 
 
 ## Routing: which mode (decide this first)
 
-Two modes, chosen by what the text is and where it goes. Measured against the Pangram 4 detector on 2026-09-10 (details in the elevate-humanizer repo CLAUDE.md):
+Two modes, chosen by what the text is and where it goes.
+
+**Framing note (2026-09-11):** this tool is no longer aimed at defeating AI detectors. Dimitri decided to accept detection and optimise for a concise, clear style that is recognisably his. Judge your output by whether it reads like him and says what he meant in fewer words, not by whether a classifier would flag it. The detector findings below are kept only because they still determine which mode to use.
 
 | Situation | Mode | Why |
 |---|---|---|
-| Everyday: Slack, email, Basecamp, client updates. Text drafted by Claude. | **Default pass** (`humanize --open -c "..."`). Add `-r business` / `-r personal` when obvious. | Strips the tells human readers notice and fixes the skeleton (paragraph length, anaphora, semicolons, closers) against Dimitri's own baseline. Short messages under ~70 words often pass detectors outright; anything longer that Claude composed will still read as AI to a classifier, and that is accepted for this tier. |
+| Everyday: Slack, email, Basecamp, client updates. Text drafted by Claude. | **Default pass** (`humanize --open -c "..."`). Add `-r business` / `-r personal` when obvious. | Strips the tells human readers notice and fixes the skeleton (paragraph length, anaphora, semicolons, closers) against Dimitri's own baseline. Detection is not a goal here; a classifier will flag anything longer that Claude composed, and that is accepted. |
 | High stakes: Hacker News, Reddit, anywhere an "AI-edited" flag costs reputation. **Dimitri wrote or dictated the text himself.** | **Tidy pass** (`humanize --tidy -c "..."`). | Typos, punctuation and speech-to-text slips only. No rewrite, no exemplars, no injected typos; reverts to the input if the model changed more than ~20% of the words. The only mode measured to keep a Human verdict: his dictation scored 0.03, a full rewrite of the same words 0.98. |
-| High stakes, but the draft was composed by Claude. | **No passing mode exists.** Say so. | Every rewrite strategy tested (any frontier model, any prompt, base-model paraphrasing, note formats, mechanical corruption) scored ~1.00 AI at 150+ words. Offer the workable path instead: Dimitri dictates or types the post in his own words (a rough voice memo transcript is enough), then `--tidy`. Claude can supply a fact list or outline for him to speak from, never the prose. |
+| High stakes, but the draft was composed by Claude. | **Default pass, and say plainly that it will read as AI-assisted.** | No rewrite makes Claude-composed prose read as human-written at length: every strategy tested through 2026-09-11 (any frontier model, any prompt, base-model paraphrasing at 8B and 14B, a commercial humanizer, mechanical corruption) either failed the detector or mangled the facts. If reading as his own writing genuinely matters for this piece, offer the one thing that works: Dimitri dictates or types it in his own words (a rough voice memo transcript is enough), then `--tidy`. Claude can supply a fact list or outline for him to speak from, never the prose. |
 
-Do not "upgrade" a high-stakes Claude draft by running it through the default pass twice, with Opus, or with heavy texture; none of that moves a detector. Do not pass Claude-composed text through `--tidy`; it will not help and the similarity guard may reject it.
+Do not "upgrade" a high-stakes Claude draft by running it through the default pass twice, with Opus, or with heavy texture; none of that improves it. A second pass adds fresh tells rather than removing them. Do not pass Claude-composed text through `--tidy`; it will not help and the similarity guard may reject it.
 
 ## Default delivery: `--open` (do NOT re-type the result)
 
@@ -78,7 +80,7 @@ Recommended invocation for anything public or client-facing: paragraph `--contex
 
 ## Author pass (do this BEFORE calling the CLI)
 
-The CLI is an editor: it fixes style but cannot know what you know. Detector A/B testing (2026-07, Pangram 3.3.2) showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" - author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
+The CLI is an editor: it fixes style but cannot know what you know. A/B testing showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" - author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
 
 1. **Count the words, then cut to the budget.** Run `wc -w` on the draft before it goes near the CLI. The CLI removes about 14% and no more (corpus median tool/input 0.86, n=414 runs), so whatever you hand it is roughly what Dimitri gets. These are the lengths he actually sends, measured across 387 real messages (2026-07-22 to 2026-09-11; study in the elevate-humanizer repo notes):
 
@@ -115,7 +117,7 @@ Read the output file once before reporting the path. Two things the LLM pass und
 - **Block uniformity:** if every paragraph landed at the same 2-3 sentence shape, make one manual edit — merge two paragraphs, or break one after its first sentence. Plain file edit, no API call.
 - **Over-repaired looseness:** if the draft had a loose construction the rewrite tidied away (a dangling clause, an abrupt topic graft, a mid-sentence "..."), consider restoring it. Looseness is texture, not error.
 
-For high-stakes public posts (HN, Reddit, LinkedIn), still surface the result for Dimitri's own quick pass. The agent's texture is sampled from Claude's distribution; his is not, and that difference is what detectors measure.
+For high-stakes public posts (HN, Reddit, LinkedIn), still surface the result for Dimitri's own quick pass. The agent's texture is sampled from Claude's distribution and his is not, and no tooling closes that gap - his hand edit is the last real lever, and the corpus records it.
 
 ### Iterating on an opened result
 
