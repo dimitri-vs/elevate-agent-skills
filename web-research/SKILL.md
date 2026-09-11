@@ -211,64 +211,55 @@ If a relevant past result exists, read it and present it to the user instead of 
 
 ## External Mode (`via chatgpt`)
 
-When invoked as `/web-research [depth] via chatgpt [topic]`, the skill routes the research to the user's consumer Deep Research subscriptions instead of calling the API. This saves ~$1-2/query while producing equivalent or better results, since the subscription is already paid for.
+When invoked as `/web-research [depth] via chatgpt [topic]`, the skill routes research to the user's consumer Deep Research subscriptions instead of the API, saving ~$1-2/query for equivalent or better results.
 
-### Drive it yourself, and run both providers
+### Default: drive it yourself, and run both providers
 
-**If browser automation is available (Claude in Chrome or equivalent), the agent runs the research itself. Do not hand the user a prompt block to paste, and do not ask whether they would rather run it themselves — that question wastes a turn and the answer is almost always "you do it."** Deep Research takes 10-30 minutes of unattended wall-clock; the entire point of driving it is that the user walks away.
+**If browser automation is available (Claude in Chrome or equivalent), run the research yourself.** Do not hand the user a prompt to paste, and do not ask whether they would rather run it — a run takes 10-30 unattended minutes and the point is that they walk away.
 
-**If the user has both ChatGPT and Gemini subscriptions, run the same prompt through both, in parallel.** The marginal cost is zero, the two run concurrently, and two independently-produced reports are worth far more than one: where they converge you can act with confidence, and where they disagree you know exactly where to dig. Ask which subscriptions exist only if it is genuinely unknown and not discoverable.
+**If the user has both ChatGPT and Gemini subscriptions, put the same prompt through both, concurrently.** Marginal cost is zero, and two independent reports show you where to trust and where to dig.
 
-Fall back to generating a prompt for the user to paste only when browser automation is unavailable, the provider's UI is blocking automation, or the user explicitly asks to run it by hand.
+Fall back to prompt-generation only when browser automation is unavailable, the provider UI blocks it, or the user asks to run it by hand.
 
 ### Workflow
 
-1. **Gather context** identically to a normal invocation — search the user's knowledge base and notes, check existing research in `~/research/`, pull in whatever makes the prompt better.
-2. **Write one fully-formed prompt** using the same structuring principles (goal, constraints, deliverables, existing knowledge). **Include an explicit instruction not to ask clarifying questions**, e.g. *"Do not ask me clarifying questions; proceed with the assumptions stated here and flag any that matter."* Consumer Deep Research otherwise stops and waits on a clarifying round, which strands an unattended run. Save the prompt to a file so both providers get byte-identical input and the query is reproducible.
-3. **Launch both runs**, then stop babysitting. Set a single long background timer (10+ minutes) rather than polling every few seconds; a tight poll loop burns turns and tokens for nothing.
-4. **Export both reports**, file them to `~/research/`, and only then read them.
-5. **Synthesize.** Read both together, reconcile them against each other, and write a short synthesis naming where they agreed, where they disagreed, and which way you called it. The synthesis is the deliverable; the raw reports are the evidence.
+1. **Gather context** as for any invocation — knowledge base, notes, existing `~/research/`.
+2. **Write one fully-formed prompt**, including an explicit *"Do not ask me clarifying questions; proceed with the assumptions stated here and flag any that matter."* Consumer Deep Research otherwise stalls on a clarifying round and strands the run. Save it to a file so both providers get identical input.
+3. **Launch both**, then set one long background timer (10+ min). Do not poll.
+4. **Export both**, file to `~/research/`, then read.
+5. **Synthesize** — where they agreed, where they disagreed, which way you called it. The synthesis is the deliverable; the raw reports are evidence.
 
-The depth argument still shapes the prompt — a `deep via chatgpt` prompt should be more detailed and multi-faceted than a `normal via chatgpt` one.
+Depth still shapes the prompt: `deep via chatgpt` should be more detailed than `normal via chatgpt`.
 
-### Browser mechanics that will bite you
+### Browser gotchas
 
-These are provider UI details, verified against real runs. They change; re-verify with a screenshot if something does not match.
+Verified against real runs; re-check with a screenshot if the UI does not match.
 
-**Enable the Deep Research mode before pasting.** On both providers it lives behind the `+` / plus button in the composer. Select it first, then confirm the mode chip actually rendered in the composer (a `find` for "Deep research" is enough) before typing anything. Pasting first and switching mode after can drop the text.
+- **Enable the Deep Research chip before pasting** — it sits behind the composer's `+` button on both providers. Confirm it rendered (a `find` for "Deep research") before entering text.
+- **Never use the `type` action for a multi-line prompt** — Enter submits after the first line. Inject via JavaScript instead.
+- **ChatGPT** takes a synthetic `paste` `ClipboardEvent` (carrying a `DataTransfer`) on `#prompt-textarea`.
+- **Gemini** uses a Quill editor at `.ql-editor` that **ignores synthetic paste**. Focus it and call `document.execCommand('insertText', false, text)`, then read back `innerText.length` — a length of 1 means it silently failed.
+- **Gemini builds a plan first** and needs an explicit "Start research" click. Confirm the run started before setting your timer.
+- **Act on one tab at a time** — batching across two domains fails partway with a permission error.
+- **Use the profile holding the subscription.** A visible "Upgrade" button means you are on the wrong one.
+- **Gemini sometimes hard-errors** ("I encountered an error doing what you asked"). Retry once in a fresh chat.
 
-**Never use the `type` action for a multi-line prompt.** Enter submits, so a multi-paragraph prompt fires off after the first line. Inject the text with JavaScript instead:
+### Exporting
 
-- **ChatGPT** — target `#prompt-textarea` and dispatch a synthetic `paste` `ClipboardEvent` carrying a `DataTransfer` with the text. This works reliably.
-- **Gemini** — the composer is a Quill editor at `.ql-editor`, and it **ignores synthetic paste events entirely**. Focus it and use `document.execCommand('insertText', false, text)` instead. Verify by reading back `el.innerText.length` and comparing to the prompt length; a returned length of 1 means the injection silently failed.
+- **ChatGPT** — the report renders as a document card; its top-right download icon offers **Export to Markdown**. If the browser asks where to save each download, a native dialog appears that automation **cannot** dismiss: warn the user, then watch the downloads directory rather than assuming it landed.
+- **Gemini** — **Share & Export → Export to Docs**, then pull the doc with the Drive API rather than the Docs UI (no dialog, far more reliable). Find it by listing Docs ordered by `createdTime desc`.
 
-**Gemini generates a research plan first** and waits on an explicit "Start research" click before doing any work. It is easy to walk away from a run that never actually started, so confirm the run is in progress before setting your timer.
-
-**Act on one tab at a time.** Batching actions across two different domains in a single browser batch fails partway with a permission error on the second domain. Take the screenshot or page-text read for one provider, then the other, in separate calls.
-
-**Use the browser profile that holds the subscription.** Paid tiers are per-account, and the wrong profile silently gets a free-tier or degraded run. An "Upgrade" button visible in the UI is the tell that you are on the wrong profile. If the user keeps separate work and personal profiles, confirm which one carries which subscription rather than guessing.
-
-**Gemini sometimes hard-errors** with a generic "I encountered an error doing what you asked" and produces nothing. Retry once in a fresh chat before concluding anything is wrong with the prompt.
-
-### Exporting the reports
-
-**ChatGPT** renders a finished Deep Research report as a document card with a download icon in its top-right corner. That menu offers **Export to Markdown**, which is what you want. Caveat: if the browser is configured to ask where to save each download, a native Save As dialog appears that browser automation **cannot** dismiss — the user has to click Save. Tell them that is coming, then watch the downloads directory for the new `.md` rather than assuming it landed.
-
-**Gemini** exports through **Share & Export → Export to Docs**, which creates a Google Doc. Do not then click through the Docs UI to download it. Pull it programmatically with the Drive API instead:
-
-```python
-drive.files().export(fileId=doc_id, mimeType="text/markdown").execute()
-```
-
-Find the newly-created doc by listing Docs ordered by `createdTime desc`. This is dramatically more reliable than driving the Docs export menu, and it sidesteps the Save As dialog entirely.
+  ```python
+  drive.files().export(fileId=doc_id, mimeType="text/markdown").execute()
+  ```
 
 ### Pair with a grounded pass for volatile facts
 
-Deep Research reports are synthesis, and they carry stale or confidently-wrong specifics for anything fast-moving — prices, stock status, current versions. When the research drives a purchase or a decision with live numbers in it, run a grounded scrape-and-quote pass **in parallel with** the Deep Research runs and reconcile the three. In practice the grounded pass is what catches "this product is discontinued everywhere" and "that price is six months old."
+Deep Research is synthesis and carries stale or confidently-wrong specifics on prices, stock, and versions. When the research drives a purchase or a live-number decision, run a grounded scrape-and-quote pass alongside it and reconcile all three. That pass is what catches "discontinued everywhere" and "that price is six months old."
 
-### Filing and frontmatter
+### Filing
 
-Save each report to `~/research/` as `YYYY-MM-DD_kebab-slug-<provider>.md`, plus the prompt and the synthesis alongside it:
+Save to `~/research/` as `YYYY-MM-DD_kebab-slug-<provider>.md`, keeping the prompt and synthesis alongside:
 
 ```
 2026-01-15_topic-slug-chatgpt.md
@@ -277,7 +268,7 @@ Save each report to `~/research/` as `YYYY-MM-DD_kebab-slug-<provider>.md`, plus
 2026-01-15_topic-slug-SYNTHESIS.md
 ```
 
-Prepend lightweight YAML frontmatter for provenance and searchability:
+Prepend lightweight frontmatter, skipping API-only fields (tokens, model, timing):
 
 ```yaml
 ---
@@ -288,18 +279,11 @@ directory: working directory at time of request
 ---
 ```
 
-Skip fields that don't apply to external research (token counts, model version, processing time, max tool calls). The `source` field enables `grep -rl "source: chatgpt" ~/research/` to separate external from API-generated reports.
+`source` enables `grep -rl "source: chatgpt" ~/research/` to separate external from API reports.
 
 ### Manual fallback
 
-When you cannot drive the browser: generate the prompt, present it in chat for the user to copy, and create no files at that stage. When the user returns with results (usually a file path from a downloads or temp location), read the content, generate the filename from the report's topic, prepend frontmatter, move it to `~/research/`, and confirm.
-
-### Recognition Patterns
-
-The user may signal results are ready with any of:
-- A file path (e.g. `C:\Users\<you>\Downloads\report.md`)
-- "file it", "research result", "here's the report"
-- Dropping a file path with minimal context after a `via chatgpt` prompt was generated earlier in the session
+When you cannot drive the browser, present the prompt in chat and create no files. The user signals results are ready with a file path (e.g. `C:\Users\<you>\Downloads\report.md`), "file it", "here's the report", or a bare path dropped after an earlier `via chatgpt` prompt. Then read it, name it from the report's topic, add frontmatter, move it to `~/research/`, and confirm.
 
 ## Credentials
 
