@@ -53,6 +53,18 @@ PROMPT_EOF
 cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp/codex_prompt.txt)"
 ```
 
+> **Prompts over ~6 KB: the heredoc stops working — use `Write` to a real Windows path.** The heredoc body is part of the same `bash -c` argument as the command, and Git Bash's MSYS2 runtime silently clips that argument at 8,186 chars (claude-code#85111). You get `unexpected EOF while looking for matching '` pointing at an innocent apostrophe, exit 2, and no review — the failure looks like a quoting bug in the prompt, so the natural next move is to fight the quoting, which never helps.
+>
+> The `/tmp` caveat above is about `/tmp` specifically, not about `Write`. `Write` to an explicit Windows path is fine and bash reads it back happily. Stage the prompt in your scratchpad directory, then keep the command itself short:
+>
+> ```bash
+> # 1. Write tool -> C:\...\scratchpad\codex_prompt.txt   (no length limit)
+> # 2. then, in Bash:
+> cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e xhigh "$(cat 'C:\...\scratchpad\codex_prompt.txt')"
+> ```
+>
+> Rule of thumb: heredoc for short and medium prompts, `Write` plus a Windows path once the prompt passes roughly 6 KB. A thorough `xhigh` review prompt usually does.
+
 ### Arguments
 
 | Arg | Description |
