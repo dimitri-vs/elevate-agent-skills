@@ -268,14 +268,15 @@ class SlackClient:
 class SlackCanvasConverter(MarkdownConverter):
     """Markdown converter that preserves Slack checklist checkbox state."""
 
-    def convert_li(self, el, text, convert_as_inline):
+    def convert_li(self, el, text, *args, **kwargs):
+        # markdownify <0.14 passes convert_as_inline positionally; >=0.14 passes
+        # parent_tags as a keyword. Forward whatever we were given.
         checked = el.get("data-checked")
+        result = super().convert_li(el, text, *args, **kwargs)
         if checked is not None:
-            result = super().convert_li(el, text, convert_as_inline)
             marker = "[x]" if checked == "true" else "[ ]"
             result = re.sub(r"^(\s*[-*])\s", rf"\1 {marker} ", result, count=1)
-            return result
-        return super().convert_li(el, text, convert_as_inline)
+        return result
 
 
 def _li_to_markdown(li) -> str:
