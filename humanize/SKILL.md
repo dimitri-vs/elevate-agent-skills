@@ -100,8 +100,10 @@ For high-stakes public posts (HN, Reddit, LinkedIn), still surface the result fo
 
 The printed path is a normal file you can edit:
 
-- **Wording tweak** the user requests ("drop the last line", "make it warmer"): `Read` the file, `Edit` it in place (Notepad++ prompts to reload on focus). This is a plain prose edit, not another humanize pass — no API call.
-- **Re-humanize differently** ("do it harder", "treat as a Slack DM"): pipe the file back through, producing a fresh file and preserving the original: `cat <path> | humanize -t --open`.
+- **Verbatim edit the user dictates** ("drop the last line", "change X to Y", "attach the template"): `Read` the file, `Edit` it in place (Notepad++ prompts to reload on focus). No API call. The test is whether the new words are the user's; if the agent is composing any prose, it is not this case.
+- **Any rewrite the agent authors** ("shorter", "30% shorter", "warmer", "tighter", "less stilted", restructuring): edit the draft, then pipe it back through, producing a fresh file and preserving the original: `cat <path> | humanize --open -c "<same context>"`. Never hand-write the shortened version into the humanized file. Agent-composed sentences carry Claude tells, so an in-place rewrite quietly undoes the pass (observed 2026-09-11: three hand-shortened drafts in a row, each reintroducing tells, until Dimitri called it out).
+- **Re-humanize differently** ("do it harder", "treat as a Slack DM"): same mechanism, with the new flags: `cat <path> | humanize -t --open`.
+- **Lines the user dictated must survive the pass.** When the user asked for a specific phrase ("say 'I promise'", "the learning curve is mine"), the compression pass may strip it as a tell. Fence it: `-s "Keep these lines verbatim: '...', '...'"`. If a pass drops one anyway, restore that line by hand (it is the user's words, so the verbatim-edit rule applies) rather than re-composing around it.
 
 **Prefer a heredoc over creating a scratch file.** Anything generated in the current conversation should pipe directly via heredoc, not via a temp file you cat back. Single-quoted delimiters (`<<'EOF'`) prevent shell expansion, so apostrophes, `"quotes"`, URLs, and `$` all pass through verbatim.
 
