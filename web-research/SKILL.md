@@ -1,6 +1,6 @@
 ---
 name: web-research
-description: Perform web research using OpenAI APIs. Fast mode uses gpt-5.5 with web_search and medium reasoning for quick lookups (~1-2 min). Normal/deep modes use gpt-5.6-sol with web_search + code interpreter at high/xhigh reasoning effort for comprehensive multi-step research. Invoke when user needs current web information or thorough research on a topic.
+description: Perform web research using OpenAI APIs. Fast mode uses gpt-5.5 with web_search and medium reasoning for quick lookups (~1-2 min). Normal/deep modes use gpt-5.6-sol with web_search + code interpreter at high/xhigh reasoning effort for comprehensive multi-step research. Also supports an external mode (`via chatgpt`) that drives the user's own ChatGPT and Gemini Deep Research subscriptions through browser automation instead of the API. Invoke when user needs current web information or thorough research on a topic.
 ---
 
 # Web Research Skill
@@ -139,9 +139,9 @@ Using a **dedicated API key** for this skill makes step 2 trivial — per-key at
 > import pathlib
 > doc = pathlib.Path(r'C:\path\to\document.md').read_text(encoding='utf-8')
 > query = 'Your research question here...\n\n---\n\n' + doc
-> pathlib.Path(r'C:\Users\Dimitri\AppData\Local\Temp\prompt.txt').write_text(query, encoding='utf-8')
+> pathlib.Path(r'C:\Users\<you>\AppData\Local\Temp\prompt.txt').write_text(query, encoding='utf-8')
 > "
-> cd "<skill-directory>" && uv run research.py -d deep "$(cat 'C:\Users\Dimitri\AppData\Local\Temp\prompt.txt')"
+> cd "<skill-directory>" && uv run research.py -d deep "$(cat 'C:\Users\<you>\AppData\Local\Temp\prompt.txt')"
 > ```
 > This avoids all quoting issues and lets you attach full documents to the research query.
 >
@@ -211,25 +211,78 @@ If a relevant past result exists, read it and present it to the user instead of 
 
 ## External Mode (`via chatgpt`)
 
-When invoked as `/web-research [depth] via chatgpt [topic]`, the skill switches to prompt-generation mode instead of calling the API. This externalizes the research to ChatGPT's Deep Research feature (included in ChatGPT Pro/Plus subscriptions), saving ~$1/query while producing equivalent results.
+When invoked as `/web-research [depth] via chatgpt [topic]`, the skill routes the research to the user's consumer Deep Research subscriptions instead of calling the API. This saves ~$1-2/query while producing equivalent or better results, since the subscription is already paid for.
+
+### Drive it yourself, and run both providers
+
+**If browser automation is available (Claude in Chrome or equivalent), the agent runs the research itself. Do not hand the user a prompt block to paste, and do not ask whether they would rather run it themselves — that question wastes a turn and the answer is almost always "you do it."** Deep Research takes 10-30 minutes of unattended wall-clock; the entire point of driving it is that the user walks away.
+
+**If the user has both ChatGPT and Gemini subscriptions, run the same prompt through both, in parallel.** The marginal cost is zero, the two run concurrently, and two independently-produced reports are worth far more than one: where they converge you can act with confidence, and where they disagree you know exactly where to dig. Ask which subscriptions exist only if it is genuinely unknown and not discoverable.
+
+Fall back to generating a prompt for the user to paste only when browser automation is unavailable, the provider's UI is blocking automation, or the user explicitly asks to run it by hand.
 
 ### Workflow
 
-1. **Context gathering** happens identically to a normal invocation - search Outline, read vault docs, check existing research in `~/research/`, pull in whatever context makes the prompt better.
-2. **Generate the prompt** using the same structuring principles (goal, constraints, deliverables, existing knowledge) but formatted for ChatGPT's Deep Research interface. ChatGPT Deep Research asks clarifying questions before starting (unlike the API which expects fully-formed prompts), so the prompt can be slightly more open-ended while still being detailed.
-3. **Present in chat** for the user to `/copy`. Do NOT execute the prompt or create any files at this stage.
-4. **When the user returns with results** (shares a file path, typically from a temp/downloads location), read the content, generate the filename from the report's topic (`YYYY-MM-DD_kebab-slug.md`), prepend frontmatter, move to `~/research/`, and confirm.
+1. **Gather context** identically to a normal invocation — search the user's knowledge base and notes, check existing research in `~/research/`, pull in whatever makes the prompt better.
+2. **Write one fully-formed prompt** using the same structuring principles (goal, constraints, deliverables, existing knowledge). **Include an explicit instruction not to ask clarifying questions**, e.g. *"Do not ask me clarifying questions; proceed with the assumptions stated here and flag any that matter."* Consumer Deep Research otherwise stops and waits on a clarifying round, which strands an unattended run. Save the prompt to a file so both providers get byte-identical input and the query is reproducible.
+3. **Launch both runs**, then stop babysitting. Set a single long background timer (10+ minutes) rather than polling every few seconds; a tight poll loop burns turns and tokens for nothing.
+4. **Export both reports**, file them to `~/research/`, and only then read them.
+5. **Synthesize.** Read both together, reconcile them against each other, and write a short synthesis naming where they agreed, where they disagreed, and which way you called it. The synthesis is the deliverable; the raw reports are the evidence.
 
-The depth argument still matters for prompt crafting - a `deep via chatgpt` prompt should be more detailed and multi-faceted than a `normal via chatgpt` prompt.
+The depth argument still shapes the prompt — a `deep via chatgpt` prompt should be more detailed and multi-faceted than a `normal via chatgpt` one.
 
-### Frontmatter for External Reports
+### Browser mechanics that will bite you
 
-When filing an externally-sourced report, prepend lightweight YAML frontmatter for provenance and searchability:
+These are provider UI details, verified against real runs. They change; re-verify with a screenshot if something does not match.
+
+**Enable the Deep Research mode before pasting.** On both providers it lives behind the `+` / plus button in the composer. Select it first, then confirm the mode chip actually rendered in the composer (a `find` for "Deep research" is enough) before typing anything. Pasting first and switching mode after can drop the text.
+
+**Never use the `type` action for a multi-line prompt.** Enter submits, so a multi-paragraph prompt fires off after the first line. Inject the text with JavaScript instead:
+
+- **ChatGPT** — target `#prompt-textarea` and dispatch a synthetic `paste` `ClipboardEvent` carrying a `DataTransfer` with the text. This works reliably.
+- **Gemini** — the composer is a Quill editor at `.ql-editor`, and it **ignores synthetic paste events entirely**. Focus it and use `document.execCommand('insertText', false, text)` instead. Verify by reading back `el.innerText.length` and comparing to the prompt length; a returned length of 1 means the injection silently failed.
+
+**Gemini generates a research plan first** and waits on an explicit "Start research" click before doing any work. It is easy to walk away from a run that never actually started, so confirm the run is in progress before setting your timer.
+
+**Act on one tab at a time.** Batching actions across two different domains in a single browser batch fails partway with a permission error on the second domain. Take the screenshot or page-text read for one provider, then the other, in separate calls.
+
+**Use the browser profile that holds the subscription.** Paid tiers are per-account, and the wrong profile silently gets a free-tier or degraded run. An "Upgrade" button visible in the UI is the tell that you are on the wrong profile. If the user keeps separate work and personal profiles, confirm which one carries which subscription rather than guessing.
+
+**Gemini sometimes hard-errors** with a generic "I encountered an error doing what you asked" and produces nothing. Retry once in a fresh chat before concluding anything is wrong with the prompt.
+
+### Exporting the reports
+
+**ChatGPT** renders a finished Deep Research report as a document card with a download icon in its top-right corner. That menu offers **Export to Markdown**, which is what you want. Caveat: if the browser is configured to ask where to save each download, a native Save As dialog appears that browser automation **cannot** dismiss — the user has to click Save. Tell them that is coming, then watch the downloads directory for the new `.md` rather than assuming it landed.
+
+**Gemini** exports through **Share & Export → Export to Docs**, which creates a Google Doc. Do not then click through the Docs UI to download it. Pull it programmatically with the Drive API instead:
+
+```python
+drive.files().export(fileId=doc_id, mimeType="text/markdown").execute()
+```
+
+Find the newly-created doc by listing Docs ordered by `createdTime desc`. This is dramatically more reliable than driving the Docs export menu, and it sidesteps the Save As dialog entirely.
+
+### Pair with a grounded pass for volatile facts
+
+Deep Research reports are synthesis, and they carry stale or confidently-wrong specifics for anything fast-moving — prices, stock status, current versions. When the research drives a purchase or a decision with live numbers in it, run a grounded scrape-and-quote pass **in parallel with** the Deep Research runs and reconcile the three. In practice the grounded pass is what catches "this product is discontinued everywhere" and "that price is six months old."
+
+### Filing and frontmatter
+
+Save each report to `~/research/` as `YYYY-MM-DD_kebab-slug-<provider>.md`, plus the prompt and the synthesis alongside it:
+
+```
+2026-01-15_topic-slug-chatgpt.md
+2026-01-15_topic-slug-gemini.md
+2026-01-15_topic-slug-PROMPT.md
+2026-01-15_topic-slug-SYNTHESIS.md
+```
+
+Prepend lightweight YAML frontmatter for provenance and searchability:
 
 ```yaml
 ---
 date: YYYY-MM-DD
-source: chatgpt-deep-research
+source: chatgpt-deep-research   # or gemini-deep-research
 query: "original prompt or topic summary"
 directory: working directory at time of request
 ---
@@ -237,10 +290,14 @@ directory: working directory at time of request
 
 Skip fields that don't apply to external research (token counts, model version, processing time, max tool calls). The `source` field enables `grep -rl "source: chatgpt" ~/research/` to separate external from API-generated reports.
 
+### Manual fallback
+
+When you cannot drive the browser: generate the prompt, present it in chat for the user to copy, and create no files at that stage. When the user returns with results (usually a file path from a downloads or temp location), read the content, generate the filename from the report's topic, prepend frontmatter, move it to `~/research/`, and confirm.
+
 ### Recognition Patterns
 
 The user may signal results are ready with any of:
-- A file path (e.g. `C:\Users\Dimitri\Documents\Temp Docs\report.md`)
+- A file path (e.g. `C:\Users\<you>\Downloads\report.md`)
 - "file it", "research result", "here's the report"
 - Dropping a file path with minimal context after a `via chatgpt` prompt was generated earlier in the session
 
