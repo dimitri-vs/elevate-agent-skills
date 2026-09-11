@@ -9,6 +9,7 @@ Supports both .claude/skills/ and .codex/skills/ target directories.
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -266,26 +267,18 @@ def copy_skill(source: Path, target: Path, state: dict, force: bool = False, dry
     target.parent.mkdir(parents=True, exist_ok=True)
 
     nosync = state.get("nosync", set())
-    preserved_files = {}
-    preserved_dirs = {}
 
-    # Preserve nosync entries before removing target
-    if target.exists() and nosync:
-        for name in nosync:
-            preserved_path = target / name
-            if preserved_path.exists():
-                if preserved_path.is_file():
-                    preserved_files[name] = preserved_path.read_bytes()
-                elif preserved_path.is_dir():
-                    tmp_dir = target.parent / f".nosync_backup_{name}"
-                    if tmp_dir.exists():
-                        shutil.rmtree(tmp_dir)
-                    shutil.copytree(preserved_path, tmp_dir)
-                    preserved_dirs[name] = tmp_dir
-
-    # Remove existing target if it exists
-    if target.exists():
-        shutil.rmtree(target)
+    # Stage the replacement beside the target, then swap it in. The target is
+    # never deleted until its replacement is complete on disk.
+    #
+    # This used to rmtree(target) and then copytree into place, which loses the
+    # target outright if anything goes wrong in between — and it does go wrong:
+    # rmtree deletes a directory's children first and the directory itself last,
+    # and Windows refuses to remove a directory that is a running process's
+    # working directory. So a sync that races a process running out of the target
+    # deletes every file, raises PermissionError, and leaves an empty directory
+    # behind. Observed 2026-09-11 on ~/.claude/skills/codex-review, mid-review.
+    # These targets are not git repos; there is no history to recover from.
 
     # Copy the skill (excluding nosync entries from source — target's version is
     # authoritative — and bytecode caches, which are excluded from hashing too)
@@ -295,16 +288,69 @@ def copy_skill(source: Path, target: Path, state: dict, force: bool = False, dry
         if rel == Path("."):
             ignored += [c for c in contents if c in nosync]
         return ignored
-    shutil.copytree(source, target, ignore=_ignore_on_copy)
 
-    # Restore preserved files and directories
-    for name, data in preserved_files.items():
-        (target / name).write_bytes(data)
-    for name, tmp_dir in preserved_dirs.items():
-        dest = target / name
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.move(str(tmp_dir), str(dest))
+    staging = target.parent / f".sync_staging_{target.name}"
+    trash = target.parent / f".sync_trash_{target.name}"
+    for leftover in (staging, trash):
+        if leftover.exists():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+    try:
+        shutil.copytree(source, staging, ignore=_ignore_on_copy)
+
+        # Carry the target's nosync entries (per-dev config, credentials, caches)
+        # into the staged tree. Reads only — the target is still untouched here.
+        if target.exists():
+            for name in nosync:
+                live = target / name
+                if not live.exists():
+                    continue
+                dest = staging / name
+                if live.is_dir():
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(live, dest)
+                else:
+                    shutil.copy2(live, dest)
+    except Exception as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        result["action"] = "error"
+        result["message"] = f"Could not stage the copy; target left unchanged: {exc}"
+        return result
+
+    # Swap. Moving the live target aside is the first destructive step, and it
+    # fails cleanly (target intact) when the target is locked or in use.
+    # os.rename, NOT shutil.move: move() falls back to copy-then-delete when the
+    # rename fails, and that fallback is the original bug all over again (it
+    # copied the target to the trash dir, then emptied the target and raised).
+    # rename is atomic, same-filesystem by construction here, and fails whole.
+    moved_aside = False
+    try:
+        if target.exists():
+            os.rename(str(target), str(trash))
+            moved_aside = True
+        os.rename(str(staging), str(target))
+    except Exception as exc:
+        if moved_aside and not target.exists():
+            try:
+                os.rename(str(trash), str(target))
+            except Exception as restore_exc:  # pragma: no cover — last resort
+                shutil.rmtree(staging, ignore_errors=True)
+                result["action"] = "error"
+                result["message"] = (
+                    f"Could not replace target AND could not restore it ({restore_exc}). "
+                    f"The previous copy is at {trash} — move it back by hand. Cause: {exc}"
+                )
+                return result
+        shutil.rmtree(staging, ignore_errors=True)
+        result["action"] = "error"
+        result["message"] = f"Could not replace target; left unchanged: {exc}"
+        return result
+
+    # The new copy is in place; the old one is now disposable. A failure to
+    # delete it is cosmetic, so never let it fail the sync.
+    if trash.exists():
+        shutil.rmtree(trash, ignore_errors=True)
 
     result["action"] = "copied"
     result["success"] = True
@@ -335,6 +381,7 @@ def cmd_sync(args) -> int:
     synced = 0
     conflicts = 0
     skipped = 0
+    errors = 0
     manifest_changed = False
 
     for skill_name in skills_to_sync:
@@ -370,13 +417,19 @@ def cmd_sync(args) -> int:
                 "copied": "[SYNC]",
                 "would_copy": "[WOULD SYNC]",
                 "skip": "[OK]",
-                "conflict": "[CONFLICT]"
+                "conflict": "[CONFLICT]",
+                "error": "[ERROR]"
             }.get(result["action"], "[?]")
 
             print(f"{status_icon} {skill_name} -> {target_base}")
             if result["action"] == "conflict":
                 print(f"         {result['message']}")
                 conflicts += 1
+            elif result["action"] == "error":
+                # Never counted as "skipped": a silent skip is how a failed sync
+                # gets mistaken for a no-op. The target is intact either way.
+                print(f"         {result['message']}")
+                errors += 1
             elif result["action"] in ("copied", "would_copy"):
                 synced += 1
                 # Update last_synced_hash after successful copy
@@ -399,7 +452,15 @@ def cmd_sync(args) -> int:
 
     # Summary
     print()
-    print(f"Total: {total} | Synced: {synced} | Skipped: {skipped} | Conflicts: {conflicts}")
+    summary = f"Total: {total} | Synced: {synced} | Skipped: {skipped} | Conflicts: {conflicts}"
+    if errors:
+        summary += f" | Errors: {errors}"
+    print(summary)
+
+    if errors > 0:
+        print("\nSome targets could not be replaced and were left as they were.")
+        print("Usually a file or directory in use — close whatever is running there and re-run.")
+        return 1
 
     if conflicts > 0:
         print("\nResolve conflicts manually or use --force to overwrite.")
