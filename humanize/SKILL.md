@@ -80,9 +80,9 @@ Recommended invocation for anything public or client-facing: paragraph `--contex
 
 ## Author pass (do this BEFORE calling the CLI)
 
-The CLI is an editor: it fixes style but cannot know what you know. A/B testing showed that lexical tells and typo texture do NOT separate "reads AI" from "reads human" - author-level texture does, and only the drafting agent can supply it, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
+The CLI is an editor: it fixes style but cannot know what you know. What Dimitri's blind judging (2026-09-10) and his edit corpus reward is author-level substance (the right length, one real opinion, honest uncertainty, a concrete fact from the thread), and only the drafting agent can supply that, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
 
-1. **Count the words, then cut to the budget.** Run `wc -w` on the draft before it goes near the CLI. The CLI removes about 14% and no more (corpus median tool/input 0.86, n=414 runs), so whatever you hand it is roughly what Dimitri gets. These are the lengths he actually sends, measured across 387 real messages (2026-07-22 to 2026-09-11; study in the elevate-humanizer repo notes):
+1. **Count the words, then cut to the budget.** Run `wc -w` on the draft before it goes near the CLI. The CLI removes about 14% and no more (corpus median tool/input 0.86, n=414 runs), so whatever you hand it is roughly what Dimitri gets. These are the lengths he actually sends, measured across 387 real messages (2026-07-22 to 2026-09-11; study at `elevate-humanizer/style-profile/2026-09-11_word-budget-study.md`, gitignored because it quotes real messages):
 
    | Message type | Aim for | Hard cap |
    |---|---|---|
@@ -193,7 +193,7 @@ The heuristic pass adds surface-level "rushed typing" signals: occasional misspe
 
 **Default behavior is `light`:** conservative probabilities, at most one transform per category. Appropriate for most content (social posts, emails, proposals). The reader shouldn't consciously notice the texture.
 
-This deliberately includes formal and quasi-legal correspondence (escalations, warranty disputes, client emails): small typos and split compounds are expected in real human email and are part of the disguise. Do not reach for `--no-heuristic` just because the content is high-stakes; reserve it for cases where the *user* asks for a verbatim-clean pass.
+This deliberately includes formal and quasi-legal correspondence (escalations, warranty disputes, client emails). It is Dimitri's standing preference: his real sent mail carries the occasional typo and split compound ("experiance", "wether" are in the baseline), so a spotless draft reads less like him, not more. Do not reach for `--no-heuristic` just because the content is high-stakes; reserve it for cases where the *user* asks for a verbatim-clean pass.
 
 - `light` (default): conservative probabilities, at most one transform per category.
 - `heavy` (casual): aggressive probabilities, multiple transforms. For Slack DMs, SMS, quick replies.
