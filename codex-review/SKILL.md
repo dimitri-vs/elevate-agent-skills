@@ -19,9 +19,9 @@ Works for both technical and non-technical contexts. For non-code reviews, the p
 
 ## Usage
 
-**Reviews take 1-5 minutes at default effort. Use the `Bash` tool directly with `run_in_background: true`.**
+**Reviews take 2-5 minutes at the default `medium` tier, 5-40 at `high`/`ultra`. Use the `Bash` tool directly with `run_in_background: true`.**
 
-> **CRITICAL — Bash timeout:** The script's internal safety timeout is 30 minutes for `high`, 60 minutes for `xhigh`.
+> **CRITICAL — Bash timeout:** The script's internal safety timeout is 30 minutes for `medium`, 60 minutes for `high` and `ultra`.
 > The Bash tool's own timeout must be **at least** as long, or the Bash wrapper
 > kills the process first and all output is lost. Always use `run_in_background: true`
 > (no timeout cap) instead of setting a fixed `timeout` value.
@@ -50,7 +50,7 @@ When the background task completes, read results with **TaskOutput**. The review
 cat > /tmp/codex_prompt.txt << 'PROMPT_EOF'
 ... your full prompt here ...
 PROMPT_EOF
-cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp/codex_prompt.txt)"
+cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e medium "$(cat /tmp/codex_prompt.txt)"
 ```
 
 > **Prompts over ~6 KB: the heredoc stops working — use `Write` to a real Windows path.** The heredoc body is part of the same `bash -c` argument as the command, and Git Bash's MSYS2 runtime silently clips that argument at 8,186 chars (claude-code#85111). You get `unexpected EOF while looking for matching '` pointing at an innocent apostrophe, exit 2, and no review — the failure looks like a quoting bug in the prompt, so the natural next move is to fight the quoting, which never helps.
@@ -60,10 +60,10 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 > ```bash
 > # 1. Write tool -> C:\...\scratchpad\codex_prompt.txt   (no length limit)
 > # 2. then, in Bash:
-> cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e xhigh "$(cat 'C:\...\scratchpad\codex_prompt.txt')"
+> cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat 'C:\...\scratchpad\codex_prompt.txt')"
 > ```
 >
-> Rule of thumb: heredoc for short and medium prompts, `Write` plus a Windows path once the prompt passes roughly 6 KB. A thorough `xhigh` review prompt usually does.
+> Rule of thumb: heredoc for short and medium prompts, `Write` plus a Windows path once the prompt passes roughly 6 KB. A thorough `high` or `ultra` review prompt usually does.
 
 ### Arguments
 
@@ -71,8 +71,9 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 |-----|-------------|
 | `-w`, `--workdir` | Project directory (Windows path) |
 | `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write` |
-| `-e`, `--effort` | Review effort level: `high` (default), `xhigh`. See below |
-| `--timeout` | Seconds before abort (default: per effort - 1800 for `high`, 3600 for `xhigh`; empirical data-exploration xhigh reviews were observed blowing past 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
+| `-e`, `--effort` | Review tier: `medium` (default), `high`, `ultra`. Spoken aliases accepted (`normal`/`regular`/`casual` → medium, `xhigh`/`extra-high` → high, `max`/`maximum`/`xxhigh`/`astra` → ultra). See below |
+| `--reasoning` | Override the tier's reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`). Env: `CODEX_REVIEW_REASONING`. Rarely needed; the tiers already pick sensible values |
+| `--timeout` | Seconds before abort (default: per tier - 1800 for `medium`, 3600 for `high`/`ultra`; empirical data-exploration xhigh reviews were observed blowing past 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
 | `--no-save` | Skip saving to ~/reviews/ |
 | `--accounts` | List available auth profiles and show which is active |
 | `--account-setup NAME` | Save current Codex login as a named profile |
@@ -80,33 +81,39 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e high "$(cat /tmp
 
 Runs in `--yolo` mode by default (no approvals, no sandbox) since nobody is present to approve prompts in non-interactive mode.
 
-### Effort levels
+### Effort tiers
 
-Default is `high`, which is good for most reviews. Escalate to `xhigh` only when the task genuinely needs deeper analysis.
+Default is `medium`: the casual "catch anything blatantly wrong" pass, and the right call for most reviews. Escalate only when the user asks for it or the task genuinely needs deeper analysis. Tier names map to spoken language, not to Codex reasoning levels: when the user says "normal", "regular", or "casual" that is `medium`; "high" or "extra high" is `high`; "max", "ultra", "xxhigh", or "Astra" is `ultra`. The script accepts all of those as aliases.
 
-| Effort | Model | Reasoning | Typical time | Use when |
-|--------|-------|-----------|--------------|----------|
-| `high` | gpt-5.6-terra | high | 2-5 min | Most reviews — code review, plan checks, bug hunts (default) |
-| `xhigh` | gpt-5.6-sol | xhigh | 5-40 min | Deep debugging, reverse engineering, architectural analysis, when Claude is stumped |
+| Tier | Model | Reasoning | Typical time | Use when |
+|------|-------|-----------|--------------|----------|
+| `medium` | gpt-5.6-terra | high | 2-5 min | Most reviews: code review, plan checks, bug hunts, sanity checks (default) |
+| `high` | gpt-5.6-sol | xhigh | 5-40 min | Deep debugging, cross-file architectural analysis, reverse engineering, when the `medium` pass missed something |
+| `ultra` | gpt-6-astra | xhigh | 4-20 min | The hardest problems only: when Claude and a `high` pass are both stumped, large cross-repo reviews, subtle data/analysis correctness. Opt-in, never the default |
+
+**Push back on `ultra` for small tasks.** OpenAI's own model guide says Astra "tends to be thorough in testing before considering a task complete" and that on smaller tasks "this can result in broader tests than the task requires". In practice it over-engineers small reviews, runs broader checks than the diff warrants, and can recommend changes that degrade simple code. If the user asks for `ultra` on a small diff, a single-file change, or a routine plan check, say so and suggest `medium` or `high` instead; run `ultra` only if they confirm. When you do run `ultra`, tell the prompt to bound the scope (for example "do not run or write tests beyond what is needed to verify the specific findings").
 
 ### Model selection
 
-The script uses a **tiered model strategy** based on effort level (as of 2026-07-13, GPT-5.6 family GA'd 2026-07-09):
+Three tiers as of 2026-09-11 (GPT-6 Astra GA'd 2026-09-04; the GPT-5.6 family from 2026-07-09 is still live and not deprecated):
 
-- **`high` (default) → `gpt-5.6-terra`** — the balanced tier: GPT-5.5-level performance at roughly half the cost ($2.50/$15 vs $5/$30 per 1M input/output API tokens). A strict upgrade over the old gpt-5.4 daily driver. Users hitting rate limits should prefer this tier.
-- **`xhigh` → `gpt-5.6-sol`** — the new flagship for hard, ambiguous, or long-horizon tasks (Terminal-Bench 2.1: 91.9% in Ultra mode). ~2x terra per token. Reserve for tasks that genuinely need it: reverse engineering, deep root-cause analysis, cross-repo architectural reviews, or when the `high` pass missed something.
+- **`medium` (default) → `gpt-5.6-terra` at `high` reasoning**: the balanced tier ($2/$12 per 1M input/output API tokens). Fast, and quality is fine for catching real bugs in ordinary changes. This is the old `high` preset under a new name; nothing about the run changed.
+- **`high` → `gpt-5.6-sol` at `xhigh`**: OpenAI now describes sol as the "reliable agentic workhorse for everyday tasks" ($4/$20 promo through 2026-11-21, then $5 input). Unchanged from the old `xhigh` preset.
+- **`ultra` → `gpt-6-astra` at `xhigh`**: the new flagship ($10/$50, 2.5x sol per token). Artificial Analysis measured Astra at `low` already scoring above sol at `xhigh` on their Intelligence Index while running 3.6x faster per task, and CodeRabbit's code-review benchmark had Astra finding 20% more bugs than sol on hard cross-file reviews but only 4% more on routine ones. Reports on `max` and `ultra` *reasoning* with Astra are consistently "diminishing returns, slower to first token than sol at max", so the preset stays at `xhigh`. Own benchmark 2026-09-11 (same 5 KB review prompt, same tree, read-only sandbox, blind-judged with repo access): Astra at `medium` 4 min, `xhigh` 10 min, `max` 19 min, all three producing the same eight must-fix findings; sol at `xhigh` took 16 min. Reasoning level above `medium` bought reproduction detail, not new findings. Neither model was more accurate than the other on the tree it reviewed.
 
-Override either default via `CODEX_REVIEW_MODEL` env var (applies to all effort levels). `gpt-5.6-luna` (fast/cheap volume tier, $1/$6) is available via the env var if you want a quick low-stakes pass.
+Override the model via `CODEX_REVIEW_MODEL` and the reasoning effort via `--reasoning` or `CODEX_REVIEW_REASONING`; both apply to whatever tier is picked. `gpt-5.6-luna` (fast/cheap volume tier, $0.20/$1.20) is available via the env var for a quick low-stakes pass.
 
 Notes:
-- **ChatGPT-account auth** (the typical setup): all three GPT-5.6 tiers (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) work under ChatGPT sign-in on Plus/Team/Pro plans — verified 2026-07-13 (Free/Go plans only get terra). Previous-gen `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` remain accepted. The floating `gpt-5-codex` alias is still NOT supported under ChatGPT auth (API-key only). `gpt-5.3-codex` and `gpt-5.2` were removed 2026-06-02.
-- **API-key auth**: the floating `gpt-5-codex` alias still resolves but OpenAI marks it deprecated (as of 2026-07). Prefer `CODEX_REVIEW_MODEL=gpt-5.6-sol` (or `-terra`) on API-key auth.
-- **New reasoning efforts (sol)**: sol supports `max` (extended chain-of-thought) and `ultra` (multi-agent subagent decomposition). The script doesn't use these — it always passes the preset's reasoning effort, so `CODEX_REVIEW_MODEL` alone can't enable them. If a review truly warrants `max`/`ultra`, edit the `EFFORT_PRESETS` dict in `review.py` for that run. `ultra` in particular consumes quota very fast (the CLI itself warns on selection).
-- **CLI version matters**: the GPT-5.6 family requires Codex CLI >= 0.144.0. The wrapper surfaces a non-blocking warning encouraging you to upgrade when your installed CLI is out of date. To upgrade, re-run the installer from pwsh 7: `irm https://chatgpt.com/codex/install.ps1 | iex` (fails under Windows PowerShell 5.1 — the script needs pwsh).
+- **ChatGPT-account auth** (the typical setup): `gpt-6-astra` and all three GPT-5.6 tiers work under ChatGPT sign-in (Astra verified 2026-09-11; Free/Go plans only get terra). Previous-gen `gpt-5.5` remains accepted. The floating `gpt-5-codex` alias is still NOT supported under ChatGPT auth (API-key only). `gpt-5.3-codex` and `gpt-5.2` were removed 2026-06-02.
+- **API-key auth**: the floating `gpt-5-codex` alias still resolves but OpenAI marks it deprecated. Prefer an explicit `CODEX_REVIEW_MODEL` on API-key auth.
+- **Reasoning levels**: sol and astra both accept `low`..`xhigh`, `max`, and `ultra` (multi-agent subagent decomposition, very quota-heavy, the CLI warns on selection). Astra has no `none`. No preset uses `max`/`ultra` reasoning; pass `--reasoning max` explicitly for a one-off.
+- **CLI version matters**: Astra requires Codex CLI >= 0.153.0 (model picker support landed in 0.154.0). The wrapper surfaces a non-blocking warning when your installed CLI is out of date. To upgrade, re-run the installer from pwsh 7: `irm https://chatgpt.com/codex/install.ps1 | iex` (fails under Windows PowerShell 5.1 — the script needs pwsh).
 
 ## Writing the Review Prompt
 
 You are responsible for writing the full prompt. Always frame Codex as an independent third-party reviewer. Common patterns:
+
+> **State the tree explicitly.** Say "review the current working tree (HEAD plus uncommitted changes)" or name one exact commit, never both. A prompt that lists commit hashes and also says HEAD is ambiguous: in the 2026-09-11 benchmark all three Astra runs pinned to the last named commit and reviewed code that later commits had already fixed, while sol reviewed HEAD. Re-check any hash list before reusing an old prompt.
 
 ### Plan implementation review
 
@@ -179,11 +186,12 @@ Expect **1-3 actionable items** per review. If you're surfacing more than 4-5 th
 1. Determine review context — ask the user if unclear:
    - What project directory? (for non-code reviews, use the CWD)
    - What should Codex review? (plan file, recent changes, advice given in this conversation, custom)
-2. Write the full review prompt (see patterns above). For non-code advisory reviews, include all relevant context inline since Codex has no conversation history.
-3. Run using the **Bash** tool directly with `run_in_background: true` — **never** a Task/subagent (see Usage above for why)
-4. Continue working on other things while waiting
-5. When the background task completes, read output with **TaskOutput**
-6. Triage findings (see above), act on the clear wins, then present the full summary table
+2. Pick the tier. Default `medium`. Use `high` when the user asks for high/xhigh or the problem is genuinely hard. Use `ultra` only when asked for max/ultra/Astra, and push back first if the task is small (see Effort tiers).
+3. Write the full review prompt (see patterns above). For non-code advisory reviews, include all relevant context inline since Codex has no conversation history.
+4. Run using the **Bash** tool directly with `run_in_background: true` — **never** a Task/subagent (see Usage above for why)
+5. Continue working on other things while waiting
+6. When the background task completes, read output with **TaskOutput**
+7. Triage findings (see above), act on the clear wins, then present the full summary table
 
 ## Account Profiles
 

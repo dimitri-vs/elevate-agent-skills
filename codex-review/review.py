@@ -40,30 +40,61 @@ CODEX_EXE = (
     or str(Path.home() / "AppData/Local/Programs/OpenAI/Codex/bin/codex.exe")
 )
 
-# Codex CLI model selection notes (as of 2026-07-13):
-# - GPT-5.6 family went GA 2026-07-09: gpt-5.6-sol (flagship), gpt-5.6-terra
-#   (balanced, ~GPT-5.5 performance at ~half the cost), gpt-5.6-luna (fast/
-#   cheap volume tier). All three work under ChatGPT-account auth; requires
-#   Codex CLI >= 0.144.0. gpt-5.5 / gpt-5.4 remain available as previous-gen.
+# Codex CLI model selection notes (as of 2026-09-11):
+# - GPT-6 Astra (gpt-6-astra) GA 2026-09-04: new flagship above the GPT-5.6
+#   family ($10/$50 per 1M API tokens vs sol $4/$20, terra $2/$12). Needs
+#   Codex CLI >= 0.153.0. Efforts low..xhigh, max, ultra; no "none".
+# - GPT-5.6 family (GA 2026-07-09) is NOT deprecated: gpt-5.6-sol (OpenAI now
+#   calls it the "reliable agentic workhorse"), gpt-5.6-terra (balanced),
+#   gpt-5.6-luna (fast/cheap). All work under ChatGPT-account auth.
 # - Under ChatGPT-account auth, Codex does NOT support the floating gpt-5-codex
 #   alias (API-key auth only). ChatGPT users must pass a versioned snapshot.
-# - Tiered model strategy (2026-07-13): gpt-5.6-terra for routine work (high) —
-#   GPT-5.5-level review quality at roughly the old gpt-5.4 cost. gpt-5.6-sol
-#   for hard/ambiguous tasks (xhigh) — the new peak model, ~2x terra per token.
-#   Sol also supports "max" and "ultra" reasoning efforts; ultra spawns
-#   subagents and burns quota very fast — not used by default here.
-# - Override at runtime via CODEX_REVIEW_MODEL (applies to all effort levels).
-# Per-effort default timeout: xhigh reviews that explore data empirically
-# routinely blow past 30 min (observed 2026-08-31), so sol gets an hour.
+# - Three review tiers (2026-09-11 remap): "medium" = terra for the casual
+#   catch-anything-blatant pass (the default), "high" = sol at xhigh for deep
+#   work, "ultra" = astra for the hardest problems. Astra over-tests and
+#   over-engineers small tasks (per OpenAI's own model guide), so the top tier
+#   is opt-in, never the default. "ultra" *reasoning* (multi-agent delegation)
+#   is available on sol and astra but not used by any preset.
+# - Override the model via CODEX_REVIEW_MODEL and the reasoning effort via
+#   --reasoning / CODEX_REVIEW_REASONING (both apply to whatever tier is picked).
+# Per-tier default timeout: xhigh reviews that explore data empirically
+# routinely blow past 30 min (observed 2026-08-31), so sol/astra get an hour.
 EFFORT_PRESETS = {
-    "high":  {"model": "gpt-5.6-terra", "reasoning": "high", "timeout": 1800},
-    "xhigh": {"model": "gpt-5.6-sol", "reasoning": "xhigh", "timeout": 3600},
+    "medium": {"model": "gpt-5.6-terra", "reasoning": "high", "timeout": 1800},
+    "high":   {"model": "gpt-5.6-sol", "reasoning": "xhigh", "timeout": 3600},
+    "ultra":  {"model": "gpt-6-astra", "reasoning": "xhigh", "timeout": 3600},
 }
+# Minimum Codex CLI that accepts each model family (server rejects older clients).
+MODEL_MIN_CLI = {
+    "gpt-6-": (0, 153, 0),
+    "gpt-5.6-": (0, 144, 0),
+}
+# Spoken-language aliases so "use normal", "xhigh", "max it out" all resolve.
+EFFORT_ALIASES = {
+    "normal": "medium", "regular": "medium", "casual": "medium",
+    "default": "medium", "med": "medium",
+    "xhigh": "high", "extra-high": "high", "extrahigh": "high",
+    "max": "ultra", "maximum": "ultra", "xxhigh": "ultra", "astra": "ultra",
+}
+VALID_REASONING = ("low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def resolve_effort(name: str) -> str:
+    """Map a tier name or alias to its canonical preset key."""
+    key = name.strip().lower()
+    key = EFFORT_ALIASES.get(key, key)
+    if key not in EFFORT_PRESETS:
+        raise argparse.ArgumentTypeError(
+            f"unknown effort {name!r}; use one of "
+            f"{', '.join(EFFORT_PRESETS)} (aliases: {', '.join(EFFORT_ALIASES)})"
+        )
+    return key
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
-# when the user's local CLI is significantly behind. Bump this periodically.
-LAST_KNOWN_CODEX_CLI = (0, 147, 0)
-LAST_KNOWN_CODEX_CLI_DATE = "2026-08-18"
+# when the user's local CLI is two or more minor versions behind. Bump this
+# periodically. (A model-specific minimum, MODEL_MIN_CLI, warns separately.)
+LAST_KNOWN_CODEX_CLI = (0, 154, 0)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-09-11"
 
 
 def slugify(text: str, max_len: int = 50) -> str:
@@ -71,10 +102,10 @@ def slugify(text: str, max_len: int = 50) -> str:
     return slug[:max_len].rstrip("-") or "review"
 
 
-def check_codex_version() -> None:
-    """Print Codex CLI version. Warn (non-blocking) if significantly behind.
+def check_codex_version(model: str = "") -> None:
+    """Warn (non-blocking) if the Codex CLI is too old for `model` or well behind latest.
 
-    Newer models (e.g. the gpt-5.6 family) require recent CLI versions; surfacing a stale
+    Newer models (e.g. gpt-6-astra) require recent CLI versions; surfacing a stale
     install proactively saves a confusing "requires a newer version of Codex"
     error round-trip.
     """
@@ -90,15 +121,25 @@ def check_codex_version() -> None:
         if not m:
             return
         current = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        if current < LAST_KNOWN_CODEX_CLI:
-            latest = ".".join(str(n) for n in LAST_KNOWN_CODEX_CLI)
-            local = version_str.removeprefix("codex-cli ").strip()
+        local = version_str.removeprefix("codex-cli ").strip()
+        upgrade_hint = (
+            "     We recommend upgrading — re-run the installer in pwsh: "
+            "irm https://chatgpt.com/codex/install.ps1 | iex"
+        )
+        needed = next((v for prefix, v in MODEL_MIN_CLI.items() if model.startswith(prefix)), None)
+        if needed and current < needed:
             print(
-                f"  ⚠️  Your Codex CLI ({local}) is out of date — last known "
-                f"latest is {latest} (checked {LAST_KNOWN_CODEX_CLI_DATE}). "
-                f"Newer models (e.g. the gpt-5.6 family) may be rejected.\n"
-                f"     We recommend upgrading — re-run the installer in pwsh: "
-                f'irm https://chatgpt.com/codex/install.ps1 | iex',
+                f"  ⚠️  Your Codex CLI ({local}) is older than {'.'.join(map(str, needed))}, "
+                f"the minimum for {model}. The server will probably reject this run.\n"
+                + upgrade_hint,
+                file=sys.stderr,
+            )
+        elif current[:2] < (LAST_KNOWN_CODEX_CLI[0], LAST_KNOWN_CODEX_CLI[1] - 1):
+            latest = ".".join(str(n) for n in LAST_KNOWN_CODEX_CLI)
+            print(
+                f"  ⚠️  Your Codex CLI ({local}) is well behind the last known "
+                f"latest {latest} (checked {LAST_KNOWN_CODEX_CLI_DATE}).\n"
+                + upgrade_hint,
                 file=sys.stderr,
             )
     except Exception:
@@ -108,6 +149,15 @@ def check_codex_version() -> None:
 def resolve_model(effort: str) -> str:
     """Resolve model name: CODEX_REVIEW_MODEL env var overrides preset default."""
     return os.getenv("CODEX_REVIEW_MODEL", EFFORT_PRESETS[effort]["model"])
+
+
+def resolve_reasoning(effort: str, override: str | None = None) -> str:
+    """Resolve reasoning effort: --reasoning flag > CODEX_REVIEW_REASONING > preset."""
+    value = override or os.getenv("CODEX_REVIEW_REASONING") or EFFORT_PRESETS[effort]["reasoning"]
+    value = value.strip().lower()
+    if value not in VALID_REASONING:
+        raise SystemExit(f"invalid reasoning effort {value!r}; use one of {', '.join(VALID_REASONING)}")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -216,16 +266,16 @@ def use_profile(name: str | None):
 
 def run_codex(prompt: str, workdir: str | None = None,
               sandbox: str | None = None, timeout: int = 1800,
-              effort: str = "high",
-              account: str | None = None) -> tuple[str, int, float, str]:
+              effort: str = "medium",
+              account: str | None = None,
+              reasoning: str | None = None) -> tuple[str, int, float, str]:
     """Run codex exec natively and return (output, exit_code, elapsed_secs, stderr).
 
     Default is --yolo mode (no approvals, no sandbox) since nobody is present
     to approve prompts in non-interactive mode. Pass --sandbox to restrict.
     """
-    preset = EFFORT_PRESETS[effort]
     model = resolve_model(effort)
-    reasoning = preset["reasoning"]
+    reasoning = resolve_reasoning(effort, reasoning)
     # Include PID so concurrent reviews launched in the same second don't
     # share (and clobber) each other's output files.
     ts = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
@@ -254,7 +304,7 @@ def run_codex(prompt: str, workdir: str | None = None,
     print(f"  Mode:      {mode}", file=sys.stderr)
     print(f"  Effort:    {effort} (model={model}, reasoning={reasoning})", file=sys.stderr)
     print(f"  Timeout:   {timeout // 60}m", file=sys.stderr)
-    check_codex_version()
+    check_codex_version(model)
 
     start = time.time()
     try:
@@ -323,8 +373,9 @@ def run_codex(prompt: str, workdir: str | None = None,
 def save_review(response: str, workdir: str | None, prompt: str,
                 *, status: str = "success", exit_code: int = 0,
                 elapsed: float = 0, stderr: str = "",
-                effort: str = "high",
-                account: str | None = None) -> Path:
+                effort: str = "medium",
+                account: str | None = None,
+                reasoning: str | None = None) -> Path:
     """Save review to ~/reviews/ with YAML frontmatter."""
     REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -346,6 +397,7 @@ def save_review(response: str, workdir: str | None, prompt: str,
         f"account: {account or 'default'}\n"
         f"effort: {effort}\n"
         f"model: {resolve_model(effort)}\n"
+        f"reasoning: {resolve_reasoning(effort, reasoning)}\n"
         f"status: {status}\n"
         f"exit_code: {exit_code}\n"
         f"elapsed: {mins}m {secs}s\n"
@@ -376,12 +428,16 @@ def main():
                         choices=["read-only", "workspace-write"],
                         help="Use sandbox instead of default --yolo mode")
     parser.add_argument("--timeout", type=int, default=None,
-                        help="Timeout in seconds (default: per effort level - "
-                             "1800 for high, 3600 for xhigh)")
-    parser.add_argument("-e", "--effort", default="high",
-                        choices=["high", "xhigh"],
-                        help="Review effort level (default: high). "
+                        help="Timeout in seconds (default: per tier - "
+                             "1800 for medium, 3600 for high/ultra)")
+    parser.add_argument("-e", "--effort", default="medium", type=resolve_effort,
+                        help="Review tier: medium (default; aliases normal/regular/casual) = "
+                             "gpt-5.6-terra@high, high (alias xhigh) = gpt-5.6-sol@xhigh, "
+                             "ultra (aliases max/xxhigh) = gpt-6-astra@xhigh. "
                              "Override model via CODEX_REVIEW_MODEL env var.")
+    parser.add_argument("--reasoning", default=None,
+                        help="Override the tier's reasoning effort "
+                             f"({'/'.join(VALID_REASONING)}). Env: CODEX_REVIEW_REASONING.")
     parser.add_argument("--no-save", action="store_true",
                         help="Don't save results to ~/reviews/")
     parser.add_argument("--accounts", action="store_true",
@@ -418,7 +474,7 @@ def main():
     with use_profile(args.account):
         response, exit_code, elapsed, stderr = run_codex(
             prompt, args.workdir, args.sandbox, timeout, args.effort,
-            account=args.account,
+            account=args.account, reasoning=args.reasoning,
         )
 
     if exit_code != 0:
@@ -437,7 +493,7 @@ def main():
                 status=status, exit_code=exit_code,
                 elapsed=elapsed, stderr=stderr,
                 effort=args.effort,
-                account=args.account,
+                account=args.account, reasoning=args.reasoning,
             )
             print(f"Saved to: {saved}", file=sys.stderr)
         except Exception as e:
