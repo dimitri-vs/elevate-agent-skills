@@ -425,6 +425,28 @@ The built-in `network` command lists URLs/statuses but **not response bodies** â
 
 ---
 
+## Headless Scripted Driver (Python, no MCP, no CLI session)
+
+For a site you will hit repeatedly from a routine or skill (a store, a portal, a dashboard), the most reliable shape is a small Python script with fixed subcommands, not an interactive CLI session. Verified 2026-09-17 with Instacart (`Code/meal-kit/scripts/instacart.py`: `login`, `search`, `add`, `cart`, `remove`).
+
+```python
+# /// script
+# dependencies = ["playwright>=1.47"]
+# ///
+from playwright.sync_api import sync_playwright
+ctx = p.chromium.launch_persistent_context(str(PROFILE_DIR), headless=True,
+        user_agent=UA, viewport={"width": 1400, "height": 900},
+        args=["--disable-blink-features=AutomationControlled"])
+page = ctx.new_page(); page.goto(url, wait_until="domcontentloaded"); page.wait_for_timeout(3500)
+rows = page.evaluate(EXTRACT_JS)   # one JS function returns plain JSON; parse nothing in Python
+```
+
+- **Persistent profile per site**, gitignored, inside the project (`.pw-profile/`). One `login` subcommand opens it headed, the user logs in themselves, closes the window; every later call is headless and already authenticated. Never type credentials from the agent.
+- **`page.evaluate` with one extraction function** per page type is the whole scraper. Return small JSON (id, name, price, size, image filename); no accessibility snapshots, no screenshots, nothing lands in context except the result.
+- **Run with `uv run script.py`.** The pinned `playwright` wheel downloads its own Chromium build on first use (~150 MB) if the matching one is missing from `%LOCALAPPDATA%\ms-playwright`.
+- **Windows Firewall prompt on first headless run** ("allow public and private networks to access chrome-headless-shell.exe"): benign, it is the DevTools listener on localhost. Cancel is fine; outbound traffic and the script are unaffected.
+- **Stop before anything irreversible.** For a shop, `add` fills the cart and exits; checkout stays manual.
+
 ## Tips & Gotchas
 
 - **Always use `--filename` with a path** for snapshots and screenshots. Without it, YAML dumps to stdout (floods context) or files land in `.playwright-cli/` with auto-generated names.
