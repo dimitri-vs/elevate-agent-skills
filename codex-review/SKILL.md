@@ -70,7 +70,7 @@ cd "<skill-dir>" && uv run review.py -w "C:\path\to\project" -e medium "$(cat /t
 | Arg | Description |
 |-----|-------------|
 | `-w`, `--workdir` | Project directory (Windows path) |
-| `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write` |
+| `-s`, `--sandbox` | Override default `--yolo` with `read-only` or `workspace-write`. **`read-only` also blocks browser launches**: under it Codex cannot start Playwright/Chromium (or its own browser-use runtime), so a "render the page and look at it" review silently degrades to reading whatever screenshots already exist plus the source (observed 2026-09-19). For any review that must render a page, use `workspace-write` (or the default) and say in the prompt where it may write screenshots |
 | `-e`, `--effort` | Review tier: `medium` (default), `high`, `ultra`. Spoken aliases accepted (`normal`/`regular`/`casual` → medium, `xhigh`/`extra-high` → high, `max`/`maximum`/`xxhigh`/`astra` → ultra). See below |
 | `--reasoning` | Override the tier's reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`). Env: `CODEX_REVIEW_REASONING`. Rarely needed; the tiers already pick sensible values |
 | `--timeout` | Seconds before abort (default: per tier - 1800 for `medium`, 3600 for `high`/`ultra`; empirical data-exploration xhigh reviews were observed blowing past 30 min). Use `--timeout 300` for small files (< 500 lines) to fail faster if something goes wrong |
@@ -138,6 +138,10 @@ This is the most common use case — after implementing a plan, check completene
 > For background, review the CLAUDE.md in the root project dir (if it exists).
 >
 > Review the following research/analysis for accuracy, completeness, and any missed considerations. Verify claims where possible by examining the source data or code. Flag anything that seems incorrect, unsupported, or worth double-checking. {additional context about what was analyzed}
+
+### Page / UI review (needs a browser)
+
+Codex has no live browser of its own in `exec` mode (the Codex app's `browser`/`chrome` plugins in `~/.codex/config.toml` only work with the desktop app running). It CAN drive headless Chromium through Playwright from the shell, which is what a rendered-page review depends on, but only if the sandbox allows process launches and writes: **never pass `-s read-only` for a page review**. Use `workspace-write` (or the default), point the prompt at a scratch directory for screenshots, and give it a known-good render recipe (`uv run --with playwright python <script>` serving the site with `python -m http.server`; the live URL may be blocked by Cloudflare's bot check for its `curl`). Ask it to state in the report how it viewed the page (live or local, which widths), so a fallback to "read the existing screenshots" is visible instead of silent.
 
 ### Advisory / decision review (non-code)
 
