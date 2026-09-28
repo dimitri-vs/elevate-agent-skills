@@ -166,6 +166,27 @@ uv run slack_canvas.py send "@sam" -m "..." --dry-run       # preview, sends not
 - `-a/--attach` is repeatable.
 - `--dry-run` prints the resolved channel and body without sending.
 
+> **Reply in-thread by default — this is the #1 send mistake.** If your message
+> answers something — a message you were pointed at, or the latest turn in an
+> ongoing DM/channel — pass `--thread <parent ts or message URL>` so it lands
+> under that message. A bare `send <target>` posts at the **top level**, which
+> reads as a non-sequitur floating next to the message it was replying to.
+> **DMs thread exactly like channels** — do not assume a DM is "just one stream"
+> where top-level is fine; if the other person's message was itself a thread
+> reply, your answer belongs in that same thread. You almost always have the
+> parent already (you just read it): `--thread` takes the parent ts **or any
+> message URL in the thread**, and a "Copy link" URL from a reply carries the
+> parent via `?thread_ts=`, so pasting that reply's URL threads correctly.
+> Omit `--thread` only when you are genuinely opening a **new** top-level topic.
+>
+> **You cannot move a message after posting.** Slack has no re-thread. If you
+> posted top-level by mistake: delete it, then repost with `--thread`. There is
+> no `delete` subcommand, so delete via the API with the same client —
+> `python -c` importing `SlackClient` from `slack_canvas` and calling
+> `client.api("chat.delete", channel="<C/D id>", ts="<the ts>")` (the send
+> result prints the ts; run it with `uv run --with requests --with markdownify
+> --with click --with python-dotenv`). Only your own messages can be deleted.
+
 ### Formatting: the body is sent verbatim as Slack mrkdwn, not Markdown
 
 The CLI does **no** Markdown conversion — what's in the file is what Slack
@@ -289,6 +310,19 @@ DevTools → Application → Cookies → `d`.
 
 **Token lifetime:** xoxd cookies last ~1 year and die on logout; xoxc may rotate
 when Slack Desktop restarts. On `not_authed`/`invalid_auth`, re-extract.
+
+### Second workspace
+
+Slack Desktop signed into more than one workspace holds one xoxc per workspace
+(the xoxd cookie is shared). `extract-token` lists them; pick one by domain:
+
+```bash
+uv run slack_canvas.py extract-token --workspace mcdcanalytics --write-env   # -> mcdcanalytics.env, .env untouched
+SLACK_ENV_FILE=C:\Users\Dimitri\.claude\skills\slack-canvas\mcdcanalytics.env uv run slack_canvas.py history "#general"
+```
+
+`SLACK_ENV_FILE` (or `--env-file PATH` before the subcommand) loads last and wins
+over `.env`; without it every command targets the default workspace as before.
 
 ## Canvas content
 

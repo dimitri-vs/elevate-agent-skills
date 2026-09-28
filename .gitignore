@@ -4,9 +4,10 @@ local/
 # Personal sync mappings
 manifest.json
 
-# Secrets
+# Secrets (incl. per-workspace slack-canvas files like mcdcanalytics.env)
 .env
 **/.env
+**/*.env
 
 # Python
 __pycache__/

@@ -36,11 +36,22 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _load_env():
-    """Load .env files. Priority: CWD > home > script dir > system env."""
+    """Load .env files. Priority: SLACK_ENV_FILE > CWD > home > script dir > system env.
+
+    SLACK_ENV_FILE (env var, or the top-level --env-file option which sets it)
+    names an alternate credentials file for a second workspace. It loads last,
+    so it wins over every other .env; a missing file is an error rather than a
+    silent fall-through to the default workspace.
+    """
+    extra = os.environ.get("SLACK_ENV_FILE")
     # Load in reverse priority order with override=True (last loaded wins)
     load_dotenv(os.path.join(SCRIPT_DIR, ".env"), override=True)
     load_dotenv(os.path.expanduser("~/.env"), override=True)
     load_dotenv(override=True)  # CWD
+    if extra:
+        if not os.path.isfile(extra):
+            raise click.ClickException(f"SLACK_ENV_FILE points at a missing file: {extra}")
+        load_dotenv(extra, override=True)
 
 
 _EDIT_METHODS = {"canvases.edit", "canvases.sections.lookup", "canvases.create",
@@ -671,13 +682,16 @@ def _output_text(text: str, output_path: str | None):
 
 
 @click.group()
-def cli():
+@click.option("--env-file", "env_file", type=click.Path(dir_okay=False), default=None,
+              help="Alternate credentials file (a second workspace); same as SLACK_ENV_FILE=PATH")
+def cli(env_file):
     """Slack CLI — read, send, watch; plus canvas read/edit.
 
     Run `doctor` first if anything is failing: it reports which tokens are
     present, who they authenticate as, and which commands they unlock.
     """
-    pass
+    if env_file:
+        os.environ["SLACK_ENV_FILE"] = env_file
 
 
 @cli.command()
@@ -706,6 +720,8 @@ def doctor():
 
     click.echo("Slack credential check")
     click.echo(f"  .env searched: {os.path.join(SCRIPT_DIR, '.env')}, ~/.env, CWD")
+    if os.environ.get("SLACK_ENV_FILE"):
+        click.echo(f"  SLACK_ENV_FILE      : {os.environ['SLACK_ENV_FILE']} (loaded last, wins)")
     click.echo(f"  SLACK_WORKSPACE_URL : {workspace or 'NOT SET  <- required for browser tokens'}")
     if workspace and "YOURWORKSPACE" in workspace.upper():
         # *.slack.com is wildcard DNS and Slack routes by token, so the placeholder
@@ -1689,7 +1705,11 @@ def download_files(targets, files_dir, as_json):
 
 @cli.command("extract-token")
 @click.option("--write-env", is_flag=True, help="Write credentials to .env in the script directory")
-def extract_token(write_env):
+@click.option("--workspace", "workspace", default=None, metavar="DOMAIN",
+              help="Pick the token of this workspace (the DOMAIN in DOMAIN.slack.com) when Slack "
+                   "Desktop is signed into several. With --write-env, writes DOMAIN.env next to "
+                   "the script instead of .env; use it via SLACK_ENV_FILE=... or --env-file.")
+def extract_token(write_env, workspace):
     """Extract xoxc token and xoxd cookie from Slack Desktop.
 
     On Windows, decrypts the xoxd cookie from Slack's Cookies DB via DPAPI.
@@ -1748,28 +1768,60 @@ def extract_token(write_env):
     click.echo(f"Scanning LevelDB: {leveldb_dir}")
     xoxc_token = None
     workspace_name = None
-    for f in sorted(glob.glob(os.path.join(leveldb_dir, "*.ldb")), reverse=True) + \
-             sorted(glob.glob(os.path.join(leveldb_dir, "*.log")), reverse=True):
-        try:
-            with open(f, "rb") as fh:
-                data = fh.read().decode("utf-8", errors="ignore")
-            for m in re.finditer(r"xoxc-[a-zA-Z0-9_-]{50,}", data):
-                xoxc_token = m.group(0)
-            if not workspace_name:
-                for m in re.finditer(r'"name":"([^"]+)"', data):
-                    start = max(0, m.start() - 200)
-                    chunk = data[start:m.end() + 500]
-                    if re.search(r"xoxc-", chunk):
-                        workspace_name = m.group(1)
-        except Exception:
-            continue
+    domain = None
+
+    # Structured pass: decode the LevelDB tables (Snappy blocks) and read the
+    # `teams` map out of Slack's localConfig_v2 record, one entry per signed-in
+    # workspace. The plaintext regex below only sees tokens that happen to
+    # survive block compression as literals, which is why it cannot tell two
+    # workspaces apart.
+    teams = _slack_teams_from_leveldb(leveldb_dir)
+    if teams:
+        click.echo(f"  Signed-in workspaces ({len(teams)}):")
+        for t in teams:
+            click.echo(f"    {t['domain']:<22} {t['name']}  ({t['id']})  token {t['token'][:20]}...")
+
+    if workspace:
+        want = _normalize_workspace_domain(workspace)
+        match = [t for t in teams if t["domain"].lower() == want]
+        if not match:
+            known = ", ".join(t["domain"] for t in teams) or "none decoded"
+            raise click.ClickException(
+                f"No signed-in workspace with domain '{want}' in Slack Desktop (found: {known})."
+            )
+        xoxc_token = match[0]["token"]
+        workspace_name = match[0]["name"]
+        domain = match[0]["domain"]
+    else:
+        for f in sorted(glob.glob(os.path.join(leveldb_dir, "*.ldb")), reverse=True) + \
+                 sorted(glob.glob(os.path.join(leveldb_dir, "*.log")), reverse=True):
+            try:
+                with open(f, "rb") as fh:
+                    data = fh.read().decode("utf-8", errors="ignore")
+                for m in re.finditer(r"xoxc-[a-zA-Z0-9_-]{50,}", data):
+                    xoxc_token = m.group(0)
+                if not workspace_name:
+                    for m in re.finditer(r'"name":"([^"]+)"', data):
+                        start = max(0, m.start() - 200)
+                        chunk = data[start:m.end() + 500]
+                        if re.search(r"xoxc-", chunk):
+                            workspace_name = m.group(1)
+            except Exception:
+                continue
+        if not xoxc_token and teams:
+            xoxc_token = teams[0]["token"]
+        owner = next((t for t in teams if t["token"] == xoxc_token), None)
+        if owner:
+            workspace_name, domain = owner["name"], owner["domain"]
+        if len(teams) > 1:
+            click.echo("  Note: several workspaces are signed in; pass --workspace DOMAIN to pick one.")
 
     if not xoxc_token:
         raise click.ClickException("No xoxc token found. Is Slack Desktop installed and logged in?")
 
     click.echo(f"  xoxc token: {xoxc_token[:40]}...")
     if workspace_name:
-        click.echo(f"  Workspace: {workspace_name}")
+        click.echo(f"  Workspace: {workspace_name}" + (f" ({domain}.slack.com)" if domain else ""))
 
     # --- Extract xoxd cookie (Windows only: DPAPI + AES-GCM) ---
     xoxd_cookie = None
@@ -1790,9 +1842,22 @@ def extract_token(write_env):
     click.echo(f"SLACK_XOXC_TOKEN={xoxc_token}")
     if xoxd_cookie:
         click.echo(f"SLACK_XOXD_COOKIE={xoxd_cookie}")
-    click.echo("SLACK_WORKSPACE_URL=https://YOURWORKSPACE.slack.com")
+    click.echo(f"SLACK_WORKSPACE_URL=https://{domain or 'YOURWORKSPACE'}.slack.com")
 
-    if write_env and xoxd_cookie:
+    if write_env and xoxd_cookie and workspace:
+        # Second-workspace mode: its own file, the main .env is never touched.
+        # SLACK_TOKEN is blanked on purpose so the default workspace's OAuth
+        # token does not bleed through (.env loads first, this file overrides).
+        env_path = os.path.join(SCRIPT_DIR, f"{domain}.env")
+        _merge_env(env_path, {
+            "SLACK_XOXC_TOKEN": xoxc_token,
+            "SLACK_XOXD_COOKIE": xoxd_cookie,
+            "SLACK_WORKSPACE_URL": f"https://{domain}.slack.com",
+            "SLACK_TOKEN": "",
+        })
+        click.echo(f"\nWrote {env_path} (main .env untouched)")
+        click.echo(f"  Use it with: SLACK_ENV_FILE={env_path} uv run slack_canvas.py doctor")
+    elif write_env and xoxd_cookie:
         env_path = os.path.join(SCRIPT_DIR, ".env")
         _merge_env(env_path, {
             "SLACK_XOXC_TOKEN": xoxc_token,
@@ -1801,6 +1866,228 @@ def extract_token(write_env):
         click.echo(f"\nUpdated {env_path} (other keys preserved)")
         if not os.getenv("SLACK_WORKSPACE_URL"):
             click.echo("  Note: SLACK_WORKSPACE_URL is not set — add your workspace domain.")
+
+
+def _normalize_workspace_domain(value: str) -> str:
+    """'https://Foo.slack.com/', 'foo.slack.com' and 'foo' all become 'foo'."""
+    v = value.strip().lower()
+    v = re.sub(r"^https?://", "", v).split("/", 1)[0]
+    return v[:-len(".slack.com")] if v.endswith(".slack.com") else v
+
+
+# --- Minimal LevelDB reader (tables + write-ahead log, Snappy blocks) -------
+# Slack Desktop keeps one xoxc token per signed-in workspace inside the
+# `teams` map of the localStorage key `localConfig_v2`. The record lives in
+# Snappy-compressed table blocks, so a plaintext scan sees at most the tokens
+# that happen to be stored as literals. This decodes the records properly and
+# needs no native dependency. Every helper fails soft: a decode error just
+# means the caller falls back to the plaintext scan.
+
+_LEVELDB_TABLE_MAGIC = bytes.fromhex("57fb808b247547db")
+
+
+def _ldb_varint(buf: bytes, pos: int) -> tuple[int, int]:
+    result = shift = 0
+    while True:
+        b = buf[pos]
+        pos += 1
+        result |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return result, pos
+        shift += 7
+
+
+def _snappy_decompress(src: bytes) -> bytes:
+    """Pure-Python decoder for Snappy's raw block format."""
+    expected, pos = _ldb_varint(src, 0)
+    out = bytearray()
+    end = len(src)
+    while pos < end:
+        tag = src[pos]
+        pos += 1
+        kind = tag & 3
+        if kind == 0:  # literal
+            length = tag >> 2
+            if length >= 60:
+                nbytes = length - 59
+                length = int.from_bytes(src[pos:pos + nbytes], "little")
+                pos += nbytes
+            length += 1
+            out += src[pos:pos + length]
+            pos += length
+            continue
+        if kind == 1:  # copy, 1-byte offset
+            length = ((tag >> 2) & 7) + 4
+            offset = ((tag >> 5) << 8) | src[pos]
+            pos += 1
+        elif kind == 2:  # copy, 2-byte offset
+            length = (tag >> 2) + 1
+            offset = int.from_bytes(src[pos:pos + 2], "little")
+            pos += 2
+        else:  # copy, 4-byte offset
+            length = (tag >> 2) + 1
+            offset = int.from_bytes(src[pos:pos + 4], "little")
+            pos += 4
+        if offset == 0 or offset > len(out):
+            raise ValueError("bad snappy copy offset")
+        start = len(out) - offset
+        if length <= offset:
+            out += out[start:start + length]
+        else:  # overlapping copy (run-length style)
+            for i in range(length):
+                out.append(out[start + i])
+    if len(out) != expected:
+        raise ValueError("snappy length mismatch")
+    return bytes(out)
+
+
+def _ldb_block_entries(block: bytes):
+    """Yield (key, value) from one table block (prefix-compressed keys)."""
+    import struct
+    if len(block) < 4:
+        return
+    num_restarts = struct.unpack("<I", block[-4:])[0]
+    end = len(block) - 4 - 4 * num_restarts
+    pos = 0
+    key = b""
+    while pos < end:
+        shared, pos = _ldb_varint(block, pos)
+        non_shared, pos = _ldb_varint(block, pos)
+        vlen, pos = _ldb_varint(block, pos)
+        key = key[:shared] + block[pos:pos + non_shared]
+        pos += non_shared
+        yield key, block[pos:pos + vlen]
+        pos += vlen
+
+
+def _ldb_table_records(path: str):
+    """Yield (seq, user_key, value) for live entries of a .ldb table file."""
+    import struct
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if len(data) < 48 or data[-8:] != _LEVELDB_TABLE_MAGIC:
+        return
+    footer = data[-48:]
+    pos = 0
+    _, pos = _ldb_varint(footer, pos)  # metaindex offset
+    _, pos = _ldb_varint(footer, pos)  # metaindex size
+    idx_off, pos = _ldb_varint(footer, pos)
+    idx_size, pos = _ldb_varint(footer, pos)
+
+    def read_block(off: int, size: int) -> bytes:
+        raw = data[off:off + size]
+        ctype = data[off + size]  # 1-byte type trailer, then 4-byte CRC
+        if ctype == 1:
+            return _snappy_decompress(raw)
+        if ctype == 0:
+            return raw
+        raise ValueError(f"unsupported block compression {ctype}")
+
+    for _, handle in _ldb_block_entries(read_block(idx_off, idx_size)):
+        b_off, p = _ldb_varint(handle, 0)
+        b_size, _ = _ldb_varint(handle, p)
+        try:
+            block = read_block(b_off, b_size)
+        except Exception:
+            continue
+        for ikey, value in _ldb_block_entries(block):
+            if len(ikey) < 8:
+                continue
+            tag = struct.unpack("<Q", ikey[-8:])[0]  # seq << 8 | type
+            if tag & 0xFF == 1:  # 1 = value, 0 = deletion
+                yield tag >> 8, ikey[:-8], value
+
+
+def _ldb_log_records(path: str):
+    """Yield (seq, user_key, value) from a .log write-ahead file (unflushed writes)."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    block_size = 32768
+    pos = 0
+    pending = b""
+    while pos + 7 <= len(data):
+        length = int.from_bytes(data[pos + 4:pos + 6], "little")
+        rtype = data[pos + 6]
+        if rtype == 0 and length == 0:  # zero padding at the end of a block
+            pos = (pos // block_size + 1) * block_size
+            continue
+        payload = data[pos + 7:pos + 7 + length]
+        pos += 7 + length
+        if rtype == 1:  # FULL
+            batches = [payload]
+        elif rtype == 2:  # FIRST
+            pending = payload
+            continue
+        elif rtype == 3:  # MIDDLE
+            pending += payload
+            continue
+        elif rtype == 4:  # LAST
+            batches = [pending + payload]
+            pending = b""
+        else:
+            return
+        for batch in batches:
+            if len(batch) < 12:
+                continue
+            seq = int.from_bytes(batch[0:8], "little")
+            count = int.from_bytes(batch[8:12], "little")
+            p = 12
+            for i in range(count):
+                if p >= len(batch):
+                    break
+                kind = batch[p]
+                p += 1
+                klen, p = _ldb_varint(batch, p)
+                key = batch[p:p + klen]
+                p += klen
+                if kind == 1:
+                    vlen, p = _ldb_varint(batch, p)
+                    yield seq + i, key, batch[p:p + vlen]
+                    p += vlen
+
+
+def _slack_teams_from_leveldb(leveldb_dir: str) -> list[dict]:
+    """The `teams` of the newest localConfig_v2 record, as a list of dicts.
+
+    Each item has id, domain, name, token, user_id. Empty when nothing decodes.
+    """
+    import glob
+    newest_seq = -1
+    newest_val = None
+    for path in glob.glob(os.path.join(leveldb_dir, "*.ldb")) + glob.glob(os.path.join(leveldb_dir, "*.log")):
+        reader = _ldb_log_records if path.endswith(".log") else _ldb_table_records
+        try:
+            for seq, key, value in reader(path):
+                if key.endswith(b"\x01localConfig_v2") and seq > newest_seq:
+                    newest_seq, newest_val = seq, value
+        except Exception:
+            continue
+    if not newest_val:
+        return []
+    # localStorage value encoding: 0x00 prefix = UTF-16LE, 0x01 prefix = Latin-1
+    try:
+        if newest_val[:1] == b"\x00":
+            text = newest_val[1:].decode("utf-16-le", errors="replace")
+        else:
+            text = newest_val[1:].decode("latin-1")
+        config = json.loads(text)
+    except Exception:
+        return []
+    teams = []
+    for tid, t in (config.get("teams") or {}).items():
+        token = t.get("token") or ""
+        if not token.startswith("xoxc-"):
+            continue
+        teams.append({
+            "id": t.get("id") or tid,
+            "domain": t.get("domain") or "",
+            "name": t.get("name") or "",
+            "token": token,
+            "user_id": t.get("user_id") or "",
+        })
+    order = config.get("orderedTeamIds") or []
+    teams.sort(key=lambda t: order.index(t["id"]) if t["id"] in order else len(order))
+    return teams
 
 
 def _merge_env(env_path: str, updates: dict[str, str]):
