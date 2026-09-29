@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!--TITLE--></title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root{
+  --bg:#eef0f3; --card:#ffffff; --ink:#1b1f24; --muted:#5d6672; --line:#d5d9df;
+  --accent:#0f6e6b; --accent-ink:#ffffff; --soft:#e2eeed; --warn:#8a3b12; --shade:rgba(10,12,15,.92);
+  --m0:#ffe95c; --m1:#ffb4ad; --m2:#b9e4c9; --m3:#c9d7ff;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#15181d; --card:#1e2229; --ink:#e6e8eb; --muted:#9aa3ad; --line:#333a44;
+  --accent:#3fb5b0; --accent-ink:#0f1a1a; --soft:#1e3230; --warn:#e79a6a;
+  --m0:#6b5a00; --m1:#7a1f1a; --m2:#1f5a36; --m3:#2b3f7a;
+}}
+:root[data-theme="dark"]{
+  --bg:#15181d; --card:#1e2229; --ink:#e6e8eb; --muted:#9aa3ad; --line:#333a44;
+  --accent:#3fb5b0; --accent-ink:#0f1a1a; --soft:#1e3230; --warn:#e79a6a;
+  --m0:#6b5a00; --m1:#7a1f1a; --m2:#1f5a36; --m3:#2b3f7a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:15px;line-height:1.45;padding:20px 16px 190px}
+body.rubric-collapsed{padding-bottom:70px}
+header{max-width:1500px;margin:0 auto 18px;display:flex;flex-wrap:wrap;gap:12px 24px;align-items:baseline}
+h1{font-family:"Source Serif 4",Georgia,serif;font-weight:600;font-size:26px;margin:0;text-wrap:balance}
+.progress{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.steps{display:flex;gap:6px;flex-wrap:wrap}
+.steps button{font:inherit;font-size:12px;padding:4px 10px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;cursor:pointer}
+.steps button.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.steps button.done{color:var(--ink)}
+.steps button.done::before{content:"\2713  "}
+main{max-width:1500px;margin:0 auto}
+.set-head{display:flex;gap:18px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap}
+.set-head .txt{flex:1 1 420px;min-width:0}
+.set-head h2{font-family:"Source Serif 4",Georgia,serif;font-size:21px;font-weight:600;margin:0 0 2px;text-wrap:balance}
+.hint,.set-head .tests{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--accent);margin:0 0 8px}
+.set-head .question{margin:0;color:var(--muted);max-width:95ch;font-size:14px;white-space:pre-wrap}
+.orig{flex:0 1 auto;max-width:100%;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
+.orig img{display:block;height:150px;max-width:100%;object-fit:contain;border-radius:4px;border:1px solid var(--line);cursor:zoom-in;margin-bottom:4px}
+.orig.wide{flex:1 1 100%}
+.orig details{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 12px}
+.orig summary{cursor:pointer}
+.orig .text{max-height:30vh;border:0;padding:8px 0 0}
+.orig audio{width:min(420px,100%)}
+.orig video{max-height:180px;max-width:100%}
+.orig iframe{width:100%;height:50vh;border:1px solid var(--line);margin-top:8px;background:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--min,340px)),1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;display:flex;flex-direction:column;min-width:0}
+.card.drag-ready .tag{cursor:grab}
+.card.drag-ready.k-image .pic{cursor:grab}
+.card.dragging{opacity:.35}
+body.dnd iframe{pointer-events:none}
+.card .tag{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.06em;color:var(--muted);padding:10px 14px 8px;display:flex;align-items:center;gap:8px;user-select:none}
+.card .tag .no{background:#000;color:#fff;padding:1px 6px;border-radius:3px}
+.card .tag .grip{letter-spacing:0;opacity:.6}
+.card .tag .zoom{margin-left:auto;font:inherit;font-size:11px;background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:4px;padding:2px 8px;cursor:pointer}
+.card .pic{background:var(--bg);display:flex;align-items:center;justify-content:center;height:min(40vh,420px);border-block:1px solid var(--line);cursor:zoom-in}
+.card .pic img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.card .media{border-block:1px solid var(--line);background:var(--bg);padding:12px;display:flex;justify-content:center}
+.card .media audio{width:100%}
+.card .media video{max-width:100%;max-height:40vh;display:block}
+.card .media.frame{padding:0;background:#fff}
+.card .media iframe{width:100%;height:min(60vh,640px);border:0;display:block}
+.text{font-family:"Source Serif 4",Georgia,serif;font-size:16px;line-height:1.55;padding:8px 16px 14px;white-space:pre-wrap;overflow-wrap:anywhere;flex:1 1 auto;max-height:52vh;overflow:auto;border-block:1px solid var(--line)}
+.text .h{font-family:"IBM Plex Sans",system-ui,sans-serif;font-weight:600}
+.text code{font-family:"IBM Plex Mono",monospace;font-size:.88em;background:var(--bg);padding:0 3px;border-radius:3px}
+.text mark{color:inherit;cursor:pointer;border-radius:2px;padding:0 1px}
+.text mark.m0{background:var(--m0)} .text mark.m1{background:var(--m1)} .text mark.m2{background:var(--m2)} .text mark.m3{background:var(--m3)}
+.card .missing{color:var(--warn);font-size:13px;padding:16px;text-align:center}
+.card .mhint{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);padding:6px 16px 0}
+.controls{padding:12px 14px 14px;display:grid;gap:10px}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+label{font-size:13px;color:var(--muted)}
+select,textarea{font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:6px 8px}
+textarea{width:100%;min-height:52px;resize:vertical}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink)}
+.reveal{display:none;margin:0 14px 14px;padding:8px 10px;border-radius:4px;font-family:"IBM Plex Mono",monospace;font-size:12px;background:var(--soft);color:var(--accent)}
+.revealed .reveal:not(:empty){display:block}
+.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:18px}
+button.primary{font:inherit;font-weight:600;font-size:15px;background:var(--accent);color:var(--accent-ink);border:0;border-radius:4px;padding:10px 18px;cursor:pointer}
+button.ghost{font:inherit;font-size:14px;background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:9px 14px;cursor:pointer}
+button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.status{font-size:13px;color:var(--muted)} .status.bad{color:var(--warn)}
+.overall{margin-top:14px}
+.done-screen{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:22px;max-width:1000px;overflow-x:auto}
+.done-screen h2{font-family:"Source Serif 4",Georgia,serif;margin:0 0 8px}
+.done-screen h3{font-size:15px;margin:18px 0 4px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);font-weight:500}
+td.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+/* lightbox */
+.lb{position:fixed;inset:0;z-index:50;background:var(--shade);display:none;flex-direction:column}
+.lb.on{display:flex}
+.lb .bar{display:flex;gap:12px;align-items:center;padding:10px 16px;color:#e6e8eb;font-family:"IBM Plex Mono",monospace;font-size:13px;flex-wrap:wrap}
+.lb .bar button{font:inherit;background:transparent;color:#e6e8eb;border:1px solid #555;border-radius:4px;padding:4px 10px;cursor:pointer}
+.lb .bar .sp{flex:1}
+.lb .stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:0 16px 16px}
+.lb .stage img{max-width:100%;max-height:100%;object-fit:contain}
+.lb .stage video{max-width:100%;max-height:100%}
+.lb .stage audio{width:min(720px,100%)}
+.lb .stage iframe{width:100%;height:100%;border:0;background:#fff}
+.lb .stage .text{background:var(--card);color:var(--ink);max-width:80ch;width:100%;max-height:100%;border:0;border-radius:6px;padding:20px 26px;font-size:18px}
+.rubric{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(0,0,0,.08);font-size:13px;max-height:45vh;overflow:auto}
+.rubric .rbar{display:flex;align-items:center;gap:8px 14px;padding:8px 16px;max-width:1500px;margin:0 auto;flex-wrap:wrap}
+.rubric .rbar strong{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.rubric .rbar #rubric-toggle{font:inherit;font-size:13px;margin-left:auto;background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:4px 10px;cursor:pointer}
+.mode{display:none;gap:4px;align-items:center}
+.mode.on{display:flex}
+.mode button{font:inherit;font-size:12px;padding:2px 10px;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;cursor:pointer}
+.mode button.on{color:var(--ink);font-weight:600;border-color:var(--ink)}
+.rubric .body{max-width:1500px;margin:0 auto;padding:0 16px 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px 24px}
+.rubric.collapsed .body{display:none}
+.rubric .body div{display:flex;gap:10px;align-items:baseline}
+.rubric .body b{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--accent);min-width:5.5em;flex:none}
+.rubric .lead{grid-column:1/-1;color:var(--muted);margin:2px 0 4px}
+@media (max-width:640px){ body{padding-bottom:120px} .rubric .rhint{display:none} .set-head .txt{flex-basis:100%} }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="progress" id="progress"></div>
+  <nav class="steps" id="steps" aria-label="Sets"></nav>
+</header>
+<main id="main"></main>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Full-size view">
+  <div class="bar"><span id="lb-label"></span><span class="sp"></span>
+    <span id="lb-hint">&larr; &rarr; switch &middot; hold O for original &middot; Esc close</span>
+    <button type="button" id="lb-orig">Hold for original</button><button type="button" id="lb-close">Close</button></div>
+  <div class="stage" id="lb-stage"></div>
+</div>
+
+<aside class="rubric" id="rubric" aria-label="Rubric">
+  <div class="rbar"><strong>Rubric</strong>
+    <span class="mode" id="mode"></span>
+    <span class="rhint" id="rubric-hint"></span>
+    <button type="button" id="rubric-toggle" aria-expanded="true">Collapse</button></div>
+  <div class="body" id="rubric-body"></div>
+</aside>
+
+<script>
+const SETS = /*SETS*/;
+const META = /*META*/;
+const KEY = "blind-judge:" + META.run + ":" + META.build;
+let state = {}; try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
+let idx = 0;
+const L = i => i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + i % 26);
+const NOUN = {image: "Image", text: "Text", audio: "Clip", video: "Video", pdf: "Doc", html: "Page", error: "Card"};
+const MARKS = META.marks || [];
+let mode = 0;
+document.getElementById("title").textContent = META.title;
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") n.className = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  for (const k of kids) n.append(k);
+  return n;
+}
+function persist() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+const nounOf = set => { const ks = new Set(set.cards.map(c => c.kind).filter(k => k !== "error")); return ks.size === 1 ? NOUN[[...ks][0]] : "Card"; };
+
+/* ---------- light markdown (escape first; line breaks kept by pre-wrap) ---------- */
+function esc(s) { return s.replace(/[&<>"]/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[ch])); }
+function md(text, fmt) {
+  let h = esc(text);
+  if (fmt === "plain") return h;
+  h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>")
+       .replace(/^(#{1,6})[ \t]+(.+)$/gm, '<span class="h">$2</span>')
+       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+       .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
+       .replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>")
+       .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '<u title="$2">$1</u>');
+  return h;
+}
+function textNode(item) { const d = el("div", {class: "text"}); d.innerHTML = md(item.text, item.format); return d; }
+
+/* ---------- media ---------- */
+function mediaEl(item, big) {
+  if (!item) return el("div");
+  switch (item.kind) {
+    case "image": return el("img", {src: item.src, alt: ""});
+    case "text": return textNode(item);
+    case "audio": return el("audio", {src: item.src, controls: "", preload: "metadata"});
+    case "video": return el("video", {src: item.src, controls: "", preload: "metadata", playsinline: ""});
+    case "pdf": return el("iframe", {src: item.src, title: "document"});
+    case "html": return el("iframe", {src: item.src, title: "page", sandbox: "allow-scripts"});
+    default: return el("div", {class: "missing"}, "No output: " + (item.error || "missing"));
+  }
+}
+
+/* ---------- lightbox ---------- */
+const lb = {set: null, i: 0, orig: false};
+function lbShow() {
+  const set = lb.set, showOrig = lb.orig && set.original, stage = document.getElementById("lb-stage");
+  const item = showOrig ? set.original : set.cards[lb.i];
+  stage.replaceChildren(mediaEl(item, true));
+  document.getElementById("lb-label").textContent = showOrig ? "ORIGINAL" : `${NOUN[item.kind] || "Card"} ${L(lb.i)} of ${set.cards.length}`;
+  document.getElementById("lb-orig").style.display = set.original ? "" : "none";
+}
+function lbOpen(set, i, orig) { lb.set = set; lb.i = Math.max(0, i); lb.orig = !!orig; document.getElementById("lb").classList.add("on"); lbShow(); }
+function lbClose() { document.getElementById("lb").classList.remove("on"); document.getElementById("lb-stage").replaceChildren(); }
+document.getElementById("lb-close").addEventListener("click", lbClose);
+document.getElementById("lb").addEventListener("click", e => { if (e.target.classList.contains("stage")) lbClose(); });
+const ob = document.getElementById("lb-orig");
+ob.addEventListener("pointerdown", () => { lb.orig = true; lbShow(); });
+["pointerup", "pointerleave"].forEach(ev => ob.addEventListener(ev, () => { if (lb.orig) { lb.orig = false; lbShow(); } }));
+document.addEventListener("keydown", e => {
+  if (!document.getElementById("lb").classList.contains("on")) return;
+  const n = lb.set.cards.length;
+  if (e.key === "Escape") lbClose();
+  else if (e.key === "ArrowRight") { lb.i = (lb.i + 1) % n; lb.orig = false; lbShow(); }
+  else if (e.key === "ArrowLeft") { lb.i = (lb.i - 1 + n) % n; lb.orig = false; lbShow(); }
+  else if ((e.key === "o" || e.key === "O") && !e.repeat && lb.set.original) { lb.orig = true; lbShow(); }
+});
+document.addEventListener("keyup", e => { if ((e.key === "o" || e.key === "O") && lb.orig) { lb.orig = false; lbShow(); } });
+
+/* ---------- text highlights (offsets over the rendered text) ---------- */
+const highlights = {};
+function paintMarks(key, div, item) {
+  div.innerHTML = md(item.text, item.format);
+  const hs = (highlights[key] || []).slice().sort((a, b) => b.start - a.start); // back to front keeps offsets valid
+  for (const h of hs) {
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT), segs = [];
+    let pos = 0, n;
+    while ((n = walker.nextNode())) {
+      const len = n.data.length, s = Math.max(h.start, pos), e = Math.min(h.end, pos + len);
+      if (s < e) segs.push([n, s - pos, e - pos]);
+      pos += len;
+    }
+    for (const [node, s, e] of segs) {
+      const mid = node.splitText(s); mid.splitText(e - s);
+      const m = el("mark", {class: "m" + (h.kind % 4), title: (MARKS[h.kind] || "mark") + ", click to remove"});
+      mid.replaceWith(m); m.append(mid);
+      m.addEventListener("click", ev => { ev.stopPropagation(); highlights[key] = highlights[key].filter(x => x !== h); paintMarks(key, div, item); });
+    }
+  }
+}
+function addMark(key, div, item) {
+  const sel = window.getSelection();
+  if (!MARKS.length || !sel || sel.isCollapsed || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  if (!div.contains(r.startContainer) || !div.contains(r.endContainer)) return;
+  const pre = document.createRange(); pre.selectNodeContents(div); pre.setEnd(r.startContainer, r.startOffset);
+  const start = pre.toString().length, end = start + r.toString().length;
+  if (end - start < 2) return;
+  const hs = highlights[key] || (highlights[key] = []);
+  sel.removeAllRanges();
+  if (hs.some(h => h.start < end && start < h.end)) return;
+  hs.push({start, end, kind: mode});
+  paintMarks(key, div, item);
+}
+function renderModes(show) {
+  const m = document.getElementById("mode"); m.replaceChildren();
+  m.classList.toggle("on", show && MARKS.length > 0);
+  if (!show || !MARKS.length) return;
+  m.append("Marking:");
+  MARKS.forEach((name, i) => {
+    const b = el("button", {type: "button", class: i === mode ? "on" : "", onclick: () => { mode = i; renderModes(true); }}, name);
+    b.style.background = `var(--m${i % 4})`; m.append(b);
+  });
+}
+
+/* ---------- pages ---------- */
+function renderSteps() {
+  const s = document.getElementById("steps"); s.replaceChildren();
+  SETS.forEach((set, i) => {
+    const b = el("button", {type: "button", class: (i === idx ? "on " : "") + (state[set.id] ? "done" : ""), onclick: () => { idx = i; render(); }}, `${i + 1}`);
+    b.title = set.title; s.append(b);
+  });
+  const allDone = SETS.every(x => state[x.id]);
+  s.append(el("button", {type: "button", class: idx >= SETS.length ? "on" : "", onclick: () => { idx = SETS.length; render(); }}, allDone ? "Results" : "Results (locked)"));
+  document.getElementById("progress").textContent = `${SETS.filter(x => state[x.id]).length} of ${SETS.length} sets judged`;
+}
+
+async function results() {
+  const main = document.getElementById("main");
+  const done = SETS.filter(s => state[s.id]);
+  const box = el("div", {class: "done-screen"}, el("h2", {}, done.length < SETS.length ? `Results (${done.length}/${SETS.length} sets judged)` : "Results"));
+  main.append(box);
+  if (done.length < SETS.length) {
+    box.append(el("p", {}, "Finish every set first; the totals reveal which is which, so peeking now spoils the blind for the remaining sets."));
+    return;
+  }
+  let R;
+  try { const r = await fetch("results.json", {cache: "no-store"}); if (!r.ok) throw new Error(r.status); R = await r.json(); }
+  catch (e) { box.append(el("p", {class: "status bad"}, "The server didn't answer, so results can't load (" + e.message + "). Restart serve and reload.")); return; }
+  const ranked = R.by_label.filter(a => a.ranked), labeled = R.by_label.filter(a => Object.keys(a.picks).length);
+  if (ranked.length) {
+    const t = el("table", {}, el("tr", {}, ...["Label", "Score", "Avg rank", "1st places", "Would use", "Missed brief", "Cards"].map(h => el("th", {}, h))));
+    ranked.forEach(a => t.append(el("tr", {}, el("td", {}, a.label), el("td", {class: "num"}, a.score.toFixed(0)), el("td", {class: "num"}, a.avg_rank.toFixed(2)),
+      el("td", {class: "num"}, `${a.firsts}`), el("td", {class: "num"}, `${a.would_use}/${a.ranked}`), el("td", {class: "num"}, `${a.missed}/${a.ranked}`), el("td", {class: "num"}, `${a.cards}`))));
+    box.append(el("h3", {}, "Ranked sets, by label"), el("p", {class: "muted"}, "Score 100 = always ranked first, 0 = always last (evens out sets of different sizes)."), t);
+  }
+  if (labeled.length) {
+    const t = el("table", {}, el("tr", {}, ...["True label", "Your picks", "Correct"].map(h => el("th", {}, h))));
+    labeled.forEach(a => t.append(el("tr", {}, el("td", {}, a.label), el("td", {}, Object.entries(a.picks).map(([k, v]) => `${k} ×${v}`).join(", ")),
+      el("td", {class: "num"}, a.graded ? `${a.correct}/${a.graded}` : "-"))));
+    box.append(el("h3", {}, "Label sets"), t);
+  }
+  box.append(el("h3", {}, "Per set"));
+  for (const s of R.sets.filter(s => s.saved)) {
+    const t = el("table", {});
+    s.cards.forEach(c => t.append(el("tr", {},
+      el("td", {class: "num"}, s.task === "rank" ? `#${c.rank}` : `${c.pick || "-"}${c.correct == null ? "" : c.correct ? " ✓" : " ✗"}`),
+      el("td", {}, c.label + (c.reveal_note ? ` (${c.reveal_note})` : "")),
+      el("td", {}, [s.task === "rank" && c.would_use ? "would use" : "", s.task === "rank" && c.missed ? "missed brief" : ""].filter(Boolean).join(", ")),
+      el("td", {class: "muted"}, c.note || ""))));
+    box.append(el("p", {}, el("strong", {}, s.title), s.overall ? el("span", {class: "muted"}, " · " + s.overall) : ""), t);
+  }
+  box.append(el("p", {class: "status"}, `Every save is appended to judgments.jsonl in the run folder (${R.run}).`));
+}
+
+function render() {
+  renderSteps();
+  const main = document.getElementById("main"); main.replaceChildren();
+  if (idx >= SETS.length) { renderModes(false); results(); window.scrollTo(0, 0); return; }
+  const set = SETS[idx], saved = state[set.id], noun = nounOf(set);
+  const kinds = new Set(set.cards.map(c => c.kind));
+  renderModes(kinds.has("text"));
+  const wrap = el("section", {class: saved ? "revealed" : ""});
+  const txt = el("div", {class: "txt"}, el("h2", {}, `${idx + 1}. ${set.title}`));
+  if (set.tests) txt.append(el("p", {class: "tests"}, set.tests));
+  if (set.question) txt.append(el("p", {class: "question"}, set.question));
+  const head = el("div", {class: "set-head"}, txt);
+  if (set.original) head.append(origBlock(set));
+  wrap.append(head);
+
+  const grid = el("div", {class: "grid"});
+  const minw = Math.max(...[...kinds].map(k => ({image: 260, text: 380, audio: 300, video: 360, pdf: 480, html: 480}[k] || 300)));
+  grid.style.setProperty("--min", minw + "px");
+  const n = set.cards.length, rank = set.task === "rank";
+  set.cards.forEach((c, i) => {
+    const prev = saved && saved.cards[c.key] || {};
+    const card = el("article", {class: "card k-" + c.kind, "data-key": c.key});
+    const tag = el("div", {class: "tag"}, `${noun} ${L(i)}`);
+    if (c.kind !== "image" && c.kind !== "error") tag.append(el("button", {type: "button", class: "zoom", onclick: () => lbOpen(set, i)}, "expand"));
+    card.append(tag);
+    if (c.kind === "image") card.append(el("div", {class: "pic", onclick: () => lbOpen(set, i)}, el("img", {src: c.src, alt: `${noun} ${L(i)}`})));
+    else if (c.kind === "text") {
+      highlights[c.key] = (prev.highlights || []).map(h => ({start: h.start, end: h.end, kind: typeof h.kind === "number" ? h.kind : Math.max(0, MARKS.indexOf(h.kind))}));
+      const d = el("div", {class: "text"});
+      paintMarks(c.key, d, c);
+      d.addEventListener("mouseup", () => addMark(c.key, d, c));
+      card.append(d);
+      if (MARKS.length) card.append(el("div", {class: "mhint"}, "select a passage to mark it (kind picked in the bar below); click a mark to remove it"));
+    } else if (c.kind === "error") card.append(el("div", {class: "pic"}, mediaEl(c)));
+    else card.append(el("div", {class: "media" + (c.kind === "pdf" || c.kind === "html" ? " frame" : "")}, mediaEl(c)));
+
+    const ctl = el("div", {class: "controls"});
+    if (rank) {
+      const sel = el("select", {id: "rank-" + c.key, "aria-label": "Rank"});
+      sel.append(el("option", {value: ""}, "rank"));
+      for (let r = 1; r <= n; r++) sel.append(el("option", {value: r, ...(prev.rank == r ? {selected: ""} : {})}, `${r}`));
+      const use = el("input", {type: "checkbox", id: "use-" + c.key, ...(prev.would_use ? {checked: ""} : {})});
+      const miss = el("input", {type: "checkbox", id: "miss-" + c.key, ...(prev.missed ? {checked: ""} : {})});
+      ctl.append(el("div", {class: "row"}, el("label", {for: "rank-" + c.key}, "Best = 1"), sel,
+        el("label", {class: "chk"}, use, "I'd use this"), el("label", {class: "chk"}, miss, "Missed the brief")));
+    } else {
+      const radios = el("div", {class: "row", role: "radiogroup", "aria-label": "Your call"});
+      set.options.forEach(v => {
+        const r = el("input", {type: "radio", name: "pick-" + c.key, value: v, ...(prev.pick === v ? {checked: ""} : {})});
+        radios.append(el("label", {class: "chk"}, r, v));
+      });
+      const conf = el("select", {id: "conf-" + c.key, "aria-label": "Confidence"});
+      for (const v of ["", "guessing", "fairly sure", "certain"]) conf.append(el("option", {value: v, ...(prev.confidence === v ? {selected: ""} : {})}, v || "how sure?"));
+      radios.append(conf);
+      ctl.append(radios);
+    }
+    const ta = el("textarea", {id: "note-" + c.key, placeholder: "What works, what's off"});
+    ta.value = prev.note || "";
+    ctl.append(ta);
+    card.append(ctl);
+    card.append(el("div", {class: "reveal", "data-reveal": c.key}, revealText(set, c)));
+    grid.append(card);
+  });
+
+  if (rank) {
+    // Drag-to-rank: drag whole cards; grid order = rank (first = 1). Rank selects stay in sync both ways.
+    const selOf = c => grid.querySelector(`[id="rank-${c.key}"]`); // wrap is not in the document yet
+    const cardFor = {};
+    let touched = !!saved, startOrder = "";
+    const order = () => [...grid.children].map(x => x.dataset.key).join(",");
+    [...grid.children].forEach((card, i) => {
+      const c = set.cards[i];
+      cardFor[c.key] = card; card.dataset.key = c.key;
+      const t = card.querySelector(".tag");
+      t.prepend(el("span", {class: "no"}, ""));
+      t.prepend(el("span", {class: "grip", "aria-hidden": "true"}, "⠇"));
+      card.classList.add("drag-ready");
+      // form controls, media players and text (for selecting passages) keep working: only drag from elsewhere
+      card.addEventListener("mousedown", e => { card.draggable = !e.target.closest("textarea,select,input,label,button,audio,video,iframe,a,.text"); });
+      card.addEventListener("dragstart", e => { card.classList.add("dragging"); document.body.classList.add("dnd"); startOrder = order(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.key); });
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging"); document.body.classList.remove("dnd");
+        if (order() === startOrder) return; // a slip or cancelled drag must never fill in ranks
+        touched = true; gridToSelects();
+      });
+    });
+    grid.addEventListener("drop", e => e.preventDefault()); // no pasted key text / navigation on drop
+    grid.addEventListener("dragover", e => {
+      e.preventDefault();
+      const dragging = grid.querySelector(".dragging"); if (!dragging) return;
+      const over = [...grid.querySelectorAll(".card:not(.dragging)")].find(x => {
+        const r = x.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      });
+      if (!over) return;
+      const r = over.getBoundingClientRect();
+      grid.insertBefore(dragging, e.clientX < r.left + r.width / 2 ? over : over.nextSibling);
+    });
+    function paintNumbers() {
+      [...grid.children].forEach((card, j) => { card.querySelector(".no").textContent = touched ? `#${j + 1}` : "unranked"; });
+    }
+    function gridToSelects() {
+      [...grid.children].forEach((card, j) => { selOf(set.cards.find(x => x.key === card.dataset.key)).value = String(j + 1); });
+      paintNumbers();
+    }
+    function selectsToGrid() {
+      // a ranked card goes to slot rank-1; unranked cards (and rank collisions) fill the gaps in A..N order
+      const slots = new Array(set.cards.length).fill(null), rest = [];
+      set.cards.forEach(c => { const r = +selOf(c).value; (r && !slots[r - 1]) ? slots[r - 1] = c : rest.push(c); });
+      slots.map(c => c || rest.shift()).forEach(c => grid.append(cardFor[c.key]));
+      if (set.cards.every(c => selOf(c).value)) touched = true;
+      paintNumbers();
+    }
+    set.cards.forEach(c => selOf(c).addEventListener("change", selectsToGrid));
+    selectsToGrid();
+    const where = kinds.has("image") && kinds.size === 1 ? "Press on the image or header to drag." : "Press on a card's header bar to drag.";
+    wrap.append(el("p", {class: "hint"}, `Drag the cards into order: best first (top-left). ${where} The rank menus work too.`));
+  } else {
+    wrap.append(el("p", {class: "hint"}, `Pick one for every ${noun.toLowerCase()}: ${set.options.join(" / ")}.`));
+  }
+  wrap.append(grid);
+  const overall = el("textarea", {id: "overall-" + set.id, placeholder: "Anything about the set as a whole"});
+  overall.value = saved && saved.overall || "";
+  wrap.append(el("div", {class: "overall"}, el("label", {for: "overall-" + set.id}, "Overall note"), overall));
+  wrap.append(el("div", {class: "actions"},
+    el("button", {type: "button", class: "primary", onclick: () => save(set, wrap)}, saved ? "Save again & reveal" : "Save & reveal"),
+    el("button", {type: "button", class: "ghost", onclick: () => { idx++; render(); }}, idx + 1 < SETS.length ? "Next set" : "Results"),
+    el("span", {class: "status", id: "status"})));
+  main.append(wrap);
+  window.scrollTo(0, 0);
+}
+
+function origBlock(set) {
+  const o = set.original;
+  if (o.kind === "image") return el("div", {class: "orig"}, el("img", {src: o.src, alt: "Original", onclick: () => lbOpen(set, 0, true)}), "original");
+  if (o.kind === "audio" || o.kind === "video") return el("div", {class: "orig"}, mediaEl(o), el("div", {}, "original"));
+  const d = el("details", {}, el("summary", {}, "Original"), mediaEl(o));
+  if (o.kind === "text") d.open = true;
+  return el("div", {class: "orig wide"}, d);
+}
+
+function revealText(set, c) {
+  const rv = state[set.id] && state[set.id].reveal && state[set.id].reveal[c.key];
+  if (!rv) return "";
+  return rv.label + (rv.note ? " · " + rv.note : "");
+}
+
+function collect(set) {
+  const g = id => document.getElementById(id), cards = {};
+  for (const c of set.cards) {
+    const row = {note: g("note-" + c.key).value.trim()};
+    if (set.task === "rank") {
+      row.rank = g("rank-" + c.key).value ? +g("rank-" + c.key).value : null;
+      row.would_use = g("use-" + c.key).checked; row.missed = g("miss-" + c.key).checked;
+    } else {
+      const r = document.querySelector(`input[name="pick-${c.key}"]:checked`);
+      row.pick = r ? r.value : null; row.confidence = g("conf-" + c.key).value || null;
+    }
+    if (c.kind === "text") {
+      const plain = (() => { const d = document.createElement("div"); d.innerHTML = md(c.text, c.format); return d.textContent; })();
+      row.highlights = (highlights[c.key] || []).map(h => ({start: h.start, end: h.end, kind: MARKS[h.kind] || "mark", text: plain.slice(h.start, h.end)}));
+    }
+    cards[c.key] = row;
+  }
+  return {run: META.run, build: META.build, set: set.id, title: set.title, task: set.task, ts: new Date().toISOString(),
+    overall: g("overall-" + set.id).value.trim(), cards};
+}
+async function save(set, wrap) {
+  const status = document.getElementById("status"), data = collect(set), noun = nounOf(set).toLowerCase();
+  if (set.task === "rank") {
+    const ranks = Object.values(data.cards).map(c => c.rank);
+    if (ranks.some(r => r == null) || new Set(ranks).size !== ranks.length) { status.className = "status bad"; status.textContent = `Give every ${noun} a different rank first.`; return; }
+  } else if (Object.values(data.cards).some(c => !c.pick)) { status.className = "status bad"; status.textContent = `Pick an answer for every ${noun} first.`; return; }
+  try {
+    const r = await fetch("save", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)});
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json();
+    state[set.id] = {...data, reveal: res.reveal};
+    persist();
+    for (const c of set.cards) wrap.querySelector(`[data-reveal="${c.key}"]`).textContent = revealText(set, c);
+    wrap.classList.add("revealed");
+    status.className = "status"; status.textContent = "Saved. Labels revealed under each card.";
+  } catch (e) {
+    status.className = "status bad"; status.textContent = "Not saved: the server didn't answer (" + e.message + "). Labels only come from the server, so restart serve and save again.";
+  }
+  renderSteps();
+}
+
+/* ---------- rubric ---------- */
+(function () {
+  const r = document.getElementById("rubric"), b = document.getElementById("rubric-toggle"), body = document.getElementById("rubric-body"), K = "blind-judge-rubric";
+  if (META.rubric.lead) body.append(el("p", {class: "lead"}, META.rubric.lead));
+  META.rubric.items.forEach(([name, text]) => body.append(el("div", {}, el("b", {}, name), el("span", {}, text))));
+  const anyImg = SETS.some(s => s.cards.some(c => c.kind === "image"));
+  document.getElementById("rubric-hint").textContent = anyImg ? "Click an image (or “expand”) for full size; ← → flips, hold O for the original." : "“Expand” opens a card full size; ← → flips, hold O for the original.";
+  function apply(c) { r.classList.toggle("collapsed", c); document.body.classList.toggle("rubric-collapsed", c); b.textContent = c ? "Show rubric" : "Collapse"; b.setAttribute("aria-expanded", String(!c)); }
+  let c = matchMedia("(max-width:640px)").matches; try { const v = localStorage.getItem(K); if (v != null) c = v === "1"; } catch (e) {}
+  apply(c);
+  b.addEventListener("click", () => { c = !c; apply(c); try { localStorage.setItem(K, c ? "1" : "0"); } catch (e) {} });
+})();
+
+/* ---------- boot: merge server saves (another browser, cleared storage) ---------- */
+(async function () {
+  try {
+    const r = await fetch("state", {cache: "no-store"});
+    if (r.ok) {
+      const srv = await r.json();
+      for (const [sid, row] of Object.entries(srv)) {
+        if (row.build !== META.build) continue;
+        if (!state[sid] || (row.ts || "") > (state[sid].ts || "")) state[sid] = row;
+        else if (!state[sid].reveal) state[sid].reveal = row.reveal;
+      }
+      persist();
+    }
+  } catch (e) {}
+  const first = SETS.findIndex(s => !state[s.id]);
+  idx = first < 0 ? SETS.length : first;
+  render();
+})();
+</script>
+</body>
+</html>
