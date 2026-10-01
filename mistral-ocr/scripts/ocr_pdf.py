@@ -123,7 +123,8 @@ def inline_image_annotations(page: Any, markdown: str, keep_image: bool) -> str:
         if keep_image:
             markdown = pattern.sub(lambda m: f"{m.group(0)}\n\n{note}", markdown)
         else:
-            markdown = pattern.sub(note, markdown)
+            # lambda: descriptions can contain backslashes, which re.sub would parse as escapes
+            markdown = pattern.sub(lambda m: note, markdown)
     return markdown
 
 
