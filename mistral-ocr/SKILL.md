@@ -17,6 +17,10 @@ That's it — writes `document.md` next to the input. `uv run` auto-installs the
 
 By default, every detected figure (chart, photo, diagram) is described inline by a vision model as `> **[Image: <type>]** <description>` where the image sat, so no visual content is silently dropped.
 
+**Figure descriptions are unreliable — treat them as rough hints, never as facts.** The OCR *text* is accurate, but the vision annotations confidently hallucinate specifics. On a 2026-10-01 printer manual they described a printer illustration as "a hexagonal prism", invented a product name ("Juniper Prisma"), and misread on-screen model numbers in driver screenshots ("iR-410WF", "PG-250MF" for JD-410WF/JD-250WF). Rules:
+- Never quote a model number, version, label, number, or name from an `[Image: ...]` block as fact. Confirm it in the surrounding OCR text, or look at the page yourself (render it with pypdfium2 and read the image).
+- **Use `--no-annotate-images` when the output gets saved somewhere durable** (vault notes, docs, attachments) or when the images are mostly screenshots or UI walkthroughs. Fabricated descriptions persisted in a knowledge base mislead future readers. Keep annotations on only for throwaway reading where a rough sense of the figures helps, such as a quick look at charts.
+
 **Requires** `MISTRAL_API_KEY` in the environment (set as a persistent user env var on this machine). If missing, the script exits with a clear error — ask the user for a key rather than falling back to a lesser extraction method.
 
 ## Options
@@ -55,6 +59,8 @@ uv run "<skill-dir>/scripts/ocr_pdf.py" scan.pdf --pages "0-4" --include-images
 ```
 
 ## Behavior & Limits (as of July 2026)
+
+- **Account gotcha (2026-10-01):** OCR calls return `429 "Rate limit exceeded"` (code 1300) when the org is on the **Free** plan, even with free allowance left and the API key otherwise working (chat completions still succeed). Adding credits alone does NOT fix it. Enable **API pay-as-you-go** at admin.mistral.ai > Subscription. A 429 on a single small page means a plan problem, not real throttling (the OCR limit is 625 pages/min).
 
 - **Flow**: uploads the file (`purpose="ocr"`) → signed URL → `/v1/ocr` → concatenates per-page markdown → deletes the uploaded file from Mistral storage.
 - **Large docs**: one request handles 100–300+ page PDFs; max upload 512 MB. Only chunk via `--pages` if you hit timeouts/429s or want resumability.
