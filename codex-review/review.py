@@ -293,8 +293,7 @@ def run_codex(prompt: str, workdir: str | None = None,
     parts.extend(["-o", str(output_file)])
     if workdir:
         parts.extend(["-C", workdir])
-    else:
-        parts.append("--skip-git-repo-check")
+    parts.append("--skip-git-repo-check")
 
     mode = f"sandbox: {sandbox}" if sandbox else "yolo (no approvals/sandbox)"
     print(f"Starting Codex review...", file=sys.stderr)
