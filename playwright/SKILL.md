@@ -427,7 +427,7 @@ The built-in `network` command lists URLs/statuses but **not response bodies** â
 
 ## Headless Scripted Driver (Python, no MCP, no CLI session)
 
-For a site you will hit repeatedly from a routine or skill (a store, a portal, a dashboard), the most reliable shape is a small Python script with fixed subcommands, not an interactive CLI session. Verified 2026-09-17 with Instacart (`Code/meal-kit/scripts/instacart.py`: `login`, `search`, `add`, `cart`, `remove`).
+For a site you will hit repeatedly from a routine or skill (a store, a portal, a dashboard), the most reliable shape is a small Python script with fixed subcommands, not an interactive CLI session. Verified 2026-09-17 with Instacart (`micro-apps/meal-kit/scripts/instacart.py`: `login`, `search`, `add`, `cart`, `remove`).
 
 ```python
 # /// script
