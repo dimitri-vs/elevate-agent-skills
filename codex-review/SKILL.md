@@ -52,7 +52,7 @@ Progress and errors go to stderr.
 | `--resume ID` | Send a follow-up turn to an earlier session. `last` picks the newest saved session (for the `-w` directory if given). Model, sandbox, account and working directory are restored from the saved review |
 | `--worktree` | Run in a new Codex-managed git worktree (detached HEAD under `~/.codex/worktrees/`). For delegated edits |
 | `-s`, `--sandbox` | `read-only` or `workspace-write` instead of the default no-sandbox mode (see Sandbox) |
-| `--reasoning` | Override the tier's reasoning effort (`low`..`xhigh`, `max`, `ultra`). Env: `CODEX_REVIEW_REASONING`. Rarely needed |
+| `--reasoning` | Override the tier's reasoning effort (`low`..`xhigh`, `max`, `ultra`). Env: `CODEX_REVIEW_REASONING`. Rarely needed. Reasoning `ultra` is not the `ultra` tier: it's multi-agent decomposition and burns quota fast |
 | `--timeout` | Seconds before abort. `--timeout 300` fails fast on small jobs |
 | `--no-save` | Skip saving to `~/reviews/`. Such sessions can still be resumed by id, but you then have to pass `-e`/`-s` yourself |
 | `-a NAME`, `--accounts`, `--account-setup NAME` | Auth profiles (see Account Profiles) |
@@ -79,7 +79,7 @@ Why `ultra` is two models:
 
 When you merge the two outputs, say which findings both models reported (high confidence) and which only one did. Each leg has its own session id. To follow up, resume the leg whose finding you're questioning. `--resume last` picks only one of them.
 
-**Push back on `ultra` for small tasks.** It doubles the quota and the noise. Also, Astra tends to over-test small tasks ("broader tests than the task requires", per OpenAI's model guide). When you do run it, bound the scope in the prompt, for example "don't run or write tests beyond what's needed to verify a finding".
+**Push back on `ultra` for small tasks.** It doubles the quota and the noise. Suggest `medium` or `high`, and run `ultra` only if the user confirms. Also, Astra tends to over-test small tasks ("broader tests than the task requires", per OpenAI's model guide). When you do run it, bound the scope in the prompt, for example "don't run or write tests beyond what's needed to verify a finding".
 
 **Model notes (2026-10-15):**
 - GPT-6.1 Sol (`gpt-6.1-sol`) has been Codex's own default since CLI 0.161, but there's no review benchmark for it yet. Try it with `CODEX_REVIEW_MODEL=gpt-6.1-sol` for a one-off. The env var applies to single tiers only; `ultra` ignores it.
@@ -101,7 +101,7 @@ The default is no sandbox and no approvals, because nobody is there to approve p
 
 The footer lists every file Codex edited with its patch tool, so an unwanted edit is visible. Writes from shell commands are not listed. For review and consult, still tell Codex in the prompt not to modify files, but don't rely on it. In the review that checked this skill (2026-10-15), Codex was told "do not modify any files" and still tried to delete a `__pycache__` folder twice. Codex's built-in command policy blocked it.
 
-Use `-s read-only` when the review must not touch anything and needs no network. The wrapper re-applies the sandbox on every `--resume`, because Codex itself doesn't carry it over (openai/codex#40149).
+For a pure review that needs no network (no database, no renders), prefer `-s read-only`. The wrapper re-applies the sandbox on every `--resume`, because Codex itself doesn't carry it over (openai/codex#40149).
 
 ## Writing the Prompt
 
@@ -114,6 +114,7 @@ You write the whole prompt; the script is a dumb pipe. Codex has no access to th
 - **Set the stance.** For reviews: "you are an independent reviewer; your job is to find what's wrong, not to validate it." Ask it to put real problems first and to say how confident it is in each.
 - **Allow any answer shape.** Don't force a template. Ask for whatever serves the question: findings ranked by severity, a recommendation with reasoning, or "nothing material found" when that's true.
 - **Grant access explicitly.** For example: "read the CLAUDE.md first", "you may use the .env credentials to query the database", "you may run the test suite". For review and consult, add: "don't modify files".
+- **Use plain Windows paths** (`C:\Users\...`) in the prompt. Codex runs natively, so no `/c/...` conversion.
 
 ### Starting points (adapt freely)
 
@@ -192,6 +193,8 @@ Codex is an independent agent and is sometimes wrong. One controlled study found
 - **Dispute:** claims you checked and believe are wrong. `--resume` with your evidence when it matters; otherwise note the disagreement.
 - **Note:** debatable or out-of-scope items. Mention them, don't act on them.
 - **Drop:** generic advice ("add more tests", "add docs").
+
+Filter hard. A typical review leaves 1-3 things worth acting on. If you're relaying more than about 5, make sure each one survived your own check.
 
 Report back in whatever shape fits. A short table helps when there are several findings: finding, verdict (fixed / disputed / noted), one-line reason. Lead with what changed and what the user needs to decide. A clean review is a fine result; say so plainly.
 
