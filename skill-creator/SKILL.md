@@ -190,7 +190,7 @@ disable-model-invocation: true  # Prevent accidental deploys
 ## Steps
 1. Verify all changes are committed
 2. Run `railway up --detach` from the correct directory
-3. Monitor logs: `timeout 10 railway logs`
+3. Check logs: `railway logs --lines 100` (a bounded fetch; bare `railway logs` streams forever)
 4. Report deployment status
 ```
 

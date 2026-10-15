@@ -18,7 +18,7 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | **interface-design** | Interface design guidance for utilitarian apps — dashboards, tools, admin panels, data-heavy UIs |
 | **playwright** | Browser automation via Playwright CLI and MCP — navigation, interaction, auth persistence, parallel sessions |
 | **pydantic-ai** | Pydantic AI agent framework — agents, tools, streaming, multi-agent delegation, FastAPI integration |
-| **railway-cli** | Railway cloud platform — deploy, logs, environments, CLI commands |
+| **railway-cli** | Railway CLI and GraphQL house rules for agents: bounded logs, deploy verification and NEEDS_APPROVAL, variables without leaking secrets, per-directory linking, build-config traps; fetches Railway's official reference files on demand |
 | **skeleton** | Skeleton UI framework reference for Svelte components |
 | **skill-creator** | Meta-skill for creating new skills with proper structure and best practices |
 | **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |

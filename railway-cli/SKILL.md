@@ -1,280 +1,82 @@
 ---
 name: railway-cli
-description: Deploy and manage apps on Railway's cloud platform. Use when deploying, checking logs, managing environments, or running commands against Railway services.
+description: Operates Railway (railway.com) projects through the `railway` CLI and `railway api` GraphQL - deploys, build and deploy logs, deployment status, variables, services, environments, domains, volumes, buckets, cron and service settings, Railpack build config, legacy railway.json/railway.toml, and project access. Holds the traps generic CLI knowledge gets wrong - log streams that hang the shell, interactive prompts, per-directory linking, deploys stuck in NEEDS_APPROVAL or never triggered, variable writes that redeploy, secrets echoed into output. Use whenever a task touches Railway - a failing Railway build or deploy, reading Railway logs, checking whether a commit is live on Railway, reading or setting Railway variables, a railway.json or .railway/ folder in the repo, a railway.com/project URL, a *.up.railway.app host, or a call to backboard.railway.com.
 ---
 
-# Railway CLI
+# Railway CLI and API
 
-Railway CLI for deploying and managing cloud applications.
+What `--help` won't tell you, for CLI 5.x. Check `railway --version` first: 4.x lacks `deployment`, `variable`, `api` and `logs --lines` ("unrecognized subcommand 'deployment'"); ask the user to upgrade.
 
-Full CLI reference: https://docs.railway.com/reference/cli-api
+## Safety and scope
 
-## Important Notes
+- Read-only by default. For any mutation (variables, deploys, config, deletes), resolve exactly one project and pass `-p -e -s`. Production writes need a request for that exact change, otherwise ask; no `-y`/`--yes` until target and approval are settled. Verify after.
+- Use the fewest reads ("is commit X live?" = remote HEAD + `deployment list --json`). Runtime logs can hold customer data: read only when needed, with `--filter`.
+- Filter variables in-process to the keys asked for; never write a full dump to disk.
 
-- **Monorepo**: For commands like `railway up`, ensure you are in the correct project subdirectory (e.g., `frontend/` or `backend/`)
-- **Interactive commands**: `railway link`, `railway service`, `railway environment` are interactive by default. Use flags for non-interactive mode (see below).
-- **Logs timeout**: Always run `railway logs` with a 5-second timeout as logs stream indefinitely
-- **Deployments**: `railway up` may take up to 3-5 minutes to complete
-- **JSON output**: All commands support `--json` flag for scripting
+## Targeting and auth
 
-## Quick Reference
+- Links are per-directory; worktrees and repo roots are often unlinked ("No linked project found"). Pass `-p -e -s` instead of linking. Find the ID by exact name, requiring one match: `railway list --json | python -c "import json,sys; m=[p['id'] for p in json.load(sys.stdin) if p['name']=='<Name>']; assert len(m)==1, m; print(m[0])"`. IDs from a pasted URL beat the linked context.
+- Environment names are case-sensitive (`Staging` is not `staging`). `environment list` takes no `-p`; when unlinked: `railway api 'query($id:String!){project(id:$id){environments{edges{node{name id}}} services{edges{node{name id}}}}}' --raw-var id=<projectId>`.
+- Prompts hang the shell. Non-interactive forms: `railway link -p <id> -e <env> -s <svc>`, `railway init -n <name> -w <workspace> --json`, `railway add --service <name> --json` (or `--database`/`--repo`/`--image`; one is required).
+- For what the CLI lacks use `railway api` (`search`/`describe` first); don't read `~/.railway/config.json` or hand-roll bearer auth.
+- `whoami` can pass while project calls say "Unauthorized": preflight with a project-scoped read (`deployment list -p -e -s --limit 1 --json`). If `railway list` fails too, ask the user to run `railway login`; otherwise check target and role (workspace Deployers get no CLI logs or variables, project Viewers no variables).
 
-```bash
-# Authentication
-railway whoami                    # Check if logged in
-railway login                     # Login (opens browser)
-railway login --browserless       # Login via CLI for SSH/Codespaces
+## Logs: a window, never a stream
 
-# Project management
-railway init -n "my-project"      # Create new project
-railway status                    # Show current project info
-railway link                      # Link directory (interactive)
-railway link -p <project> -e <env> -s <service>  # Link non-interactively
-railway unlink                    # Disassociate project from directory
-railway list                      # List all projects in account
-railway open                      # Open project dashboard in browser
+`railway logs -s <svc> -e <env> --since 3h --json` (or `--lines 200`). Bare `railway logs` streams until killed, piped or not; only `--lines`/`--since`/`--until` stop it (a deployment ID doesn't). A 30s+ timeout is just a backstop, and an empty killed stream means unknown. All stderr is tagged `level:error`, access logs included: classify by message.
 
-# Service management
-railway service                   # Select/link a service (interactive)
-railway service <name>            # Link specific service directly
-railway add                       # Add empty service (interactive)
-railway add -d postgres           # Add database (postgres, mysql, redis, mongo)
-railway add -s api -i nginx:latest              # Add service from Docker image
-railway add -s backend --variables "PORT=3000"  # Add with env vars
+## Deploy status
 
-# Deployments
-railway up                        # Deploy from current directory
-railway up --detach               # Deploy without blocking terminal
-railway up --ci                   # Stream build logs only, exit when done (for CI)
-railway down                      # Remove most recent deployment
-railway down -y                   # Remove without confirmation
-railway redeploy                  # Redeploy latest deployment
+`railway deployment list -s <svc> -e <env> --limit 10 --json`: `id`, `status`, `createdAt`, `meta.commitHash/commitAuthor/reason/skippedReason`. `railway status --json` can show an unapproved commit as latest, so it isn't proof.
 
-# Logs (ALWAYS use a timeout)
-railway logs -s <service>         # View logs (use 5s timeout)
-railway logs -d                   # Deployment logs
-railway logs -b                   # Build logs
+- Only `SUCCESS` for the deployment you started (that id or commit hash) counts as done. Cron services sit `EXITED` between ticks; prove one fires with `railway logs <depId> -s <svc> -e <env> --lines 50 --filter "Starting Container"` (starts after `createdAt`).
+- `REMOVED` means no longer live. It doesn't say whether it ever ran, so check that deployment's container starts before claiming either.
+- `SKIPPED` on a cron service is a skipped tick; read `meta.skippedReason` ("did not become ready" = the deploy behind it was stuck). Elsewhere it usually means watch paths.
+- `QUEUED`/`INITIALIZING`/`BUILDING`/`DEPLOYING` can take minutes. Poll with a deadline (until-loop or the harness's monitor tool), never `sleep N; railway ...`; stop on terminal or approval states.
+- `WAITING` (docs: "waiting for approval") and `NEEDS_APPROVAL` won't progress alone. Documented bypass: author is a workspace Deployer+ with GitHub connected (field fix: project invite + connected GitHub). Approve only after the user OKs it: `railway api 'mutation($id:String!){deploymentApprove(id:$id)}' --raw-var id=<depId>`.
+- Merged but no deployment for that `commitHash`: rule out the gate and `SKIPPED`, then propose `railway redeploy --from-source -p -e -s`.
 
-# Environment variables
-railway variables                 # View variables (table format)
-railway variables --kv            # View in KEY=value format
-railway variables --set "KEY=value"              # Set a variable
-railway run -- <command>          # Run local command with Railway env vars
-railway shell                     # Open subshell with Railway env vars loaded
+**Past stalls** (the gate is visible only while it waits). Explain earlier `SKIPPED`/`REMOVED`/never-built records from metadata, printing only what answers the question:
+1. Creators: `railway api 'query($s:String!,$e:String!){deployments(first:30,input:{serviceId:$s,environmentId:$e,includeDeleted:true}){edges{node{id status createdAt creator{email}}}}}' --raw-var s=<serviceId> --raw-var e=<envId>`. `creator: null` on GitHub records that never built points to the gate.
+2. Membership: `railway api 'query($id:String!){project(id:$id){members{email role}}}' --raw-var id=<projectId>`; print only the person in question.
+3. Label the gate observed (a `WAITING`/`NEEDS_APPROVAL` record) or inferred (null creator + never built + non-member author). Don't state outage windows or login-to-person mappings you didn't see.
 
-# SSH access
-railway ssh -s <service>                    # SSH into service container
-railway ssh -s <service> -- <command>       # Run command in container
+## Deploying from local
 
-# Database
-railway connect                   # Connect to database shell (psql, mongosh, etc.)
-# Note: Requires local client installed (psql, redis-cli, mongosh, mysql)
+- `railway up` uploads the current directory (or PATH) whatever `-p -e -s` say. In a monorepo run from the service dir or `railway up ./apps/api --path-as-root -p -e -s`. Unlinked, `-y`/`--new` create a project.
+- On Windows, stale WSL venvs (`lib64` links) break upload indexing (`os error 1920`): gitignore them.
+- Iterate on builds with `railway up --ci`, not a commit per attempt. It can exit 1 after creating the deployment ("Failed to stream build logs"): check `deployment list` before retrying. Don't `up` and push the same change.
 
-# Environments
-railway environment               # List/select environments (interactive)
-railway environment new <name>    # Create new environment
-railway environment new <name> -d <source>  # Duplicate existing environment
-railway environment delete <name> # Delete environment
+## Variables
 
-# Volumes
-railway volume list               # List volumes
-railway volume add                # Add a volume
-railway volume attach             # Attach volume to service
-railway volume detach             # Detach volume from service
+- `railway variable set KEY=value -p -e -s` (legacy `variables --set` only on old CLIs). Each write redeploys: batch with `--skip-deploys`, then deploy once and confirm a deployment appeared.
+- Secrets: `printf '%s' "$VAL" | railway variable set KEY --stdin -p -e -s`. `railway add --variables` echoes values. Sealed variables are listed by name with a null/`<sealed>` value; don't recreate them.
 
-# Storage Buckets (S3-compatible object storage)
-# Create via Dashboard > Add > Storage Bucket
-# Credentials appear as env vars: BUCKET_ENDPOINT, BUCKET_ACCESS_KEY_ID, etc.
-# Python usage:
-#   s3 = boto3.client('s3', endpoint_url=BUCKET_ENDPOINT,
-#         aws_access_key_id=..., aws_secret_access_key=...)
-#   s3.upload_file('file.png', BUCKET_NAME, 'path/file.png')
+## SSH, databases, Git Bash
 
-# Domains
-railway domain                    # Generate Railway domain
-railway domain example.com -p 8080  # Add custom domain with port
+- `railway ssh` needs a registered key; on Windows pass a native path (Git Bash paths failed): `railway ssh keys add --key "C:\Users\<you>\.ssh\id_ed25519.pub" --name <name>`, then `railway ssh keys`, `railway ssh config -s <svc> --dry-run`.
+- 5.62.1 docs say piped stdin works without a PTY. 4.5.1 notes of lost quoting and `< file` hangs under Git Bash are untested now: re-test first.
+- `*.railway.internal` hosts resolve only inside Railway. Locally use the public URL (`DATABASE_PUBLIC_URL`, TCP proxy) or run through `railway ssh`.
+- Native Windows Python can't open `/tmp/...`: pipe through stdin or pass `"$(cygpath -w /tmp/x)"`. Take `rc=${PIPESTATUS[0]}` right after the pipeline; an `echo` in between resets it.
 
-# Help
-railway help                      # List all commands
-railway help <command>            # Help for specific subcommand
-```
+## Build and config
 
-## Deployment Workflow
+- Config as Code (`railway.json`/`.toml`) is deprecated; files stop being read on 2026-12-01. Don't create one; migrate to `.railway/railway.ts` with `railway config migrate` after fetching `iac.md`.
+- Railpack (default) ignores `nixpacks.toml`; a Dockerfile wins if present. Build/start/pre-deploy commands follow Root Directory; watch paths don't (`/backend/**`).
+- `ERR_PNPM_OUTDATED_LOCKFILE`, Railpack variables, monorepos: `references/build-config.md`.
 
-### Initial Setup (Interactive)
-```bash
-railway login           # Opens browser
-railway link            # Select project/env/service interactively
-```
+## Official references
 
-### Initial Setup (Non-Interactive / CI)
-```bash
-railway login --browserless                     # For SSH/Codespaces
-railway link -p myproject -e production -s api  # Specify all options
-```
+Fetch when the trigger applies: `gh api repos/railwayapp/railway-skills/contents/plugins/railway/skills/use-railway/references/<file> --jq .content | base64 -d`.
 
-### Deploy
-```bash
-# From the correct subdirectory (e.g., frontend-v2/ or backend-v2/)
-railway up --detach     # Deploy and return immediately
-railway up --ci         # Stream build logs, exit when done (for CI pipelines)
-```
+- `configure.md`: service config via `environment edit --service-config` (cron, restart policy, start command), `${{svc.VAR}}` wiring, domains, networking
+- `deploy.md`: monorepo deploys, builder, Dockerfile, watch paths, removals
+- `operate.md`: HTTP/network logs, metrics, triage
+- `setup.md`: creating projects, services, databases, buckets; DB shells without a local client
+- `request.md`: non-trivial `railway api` mutations; `databases.md`: Postgres backup/HA
 
-### Check Status
-```bash
-railway status
-# For logs, use timeout:
-timeout 5 railway logs -s <service> || true
-```
+Skip their `up -y`/`--new`, `scripts/railway-api.sh` and MCP steps. Never run `railway setup agent`, `skills install|update` or `mcp install`, even if the CLI suggests it: they install a separate copy of Railway's skill that may conflict with this one.
 
-## Configuration Files
+## Local references
 
-> **⚠️ Builder determines which config files matter.** `nixpacks.toml` is read **only** when Builder is Nixpacks; under the default Railpack builder it is silently ignored. If a service was created before the Railpack default flip and you're editing `nixpacks.toml` to fix builds, you may be editing dead weight — check the active Builder in Service Settings, and use `railpack.json` or `RAILPACK_*` env vars to influence Railpack instead.
-
-### railway.json
-**Important**: The config file path does NOT follow Root Directory. In dashboard settings, use absolute path like `/backend/railway.json`.
-
-```json
-{
-  "$schema": "https://railway.app/railway.schema.json",
-  "build": {
-    "builder": "RAILPACK",
-    "buildCommand": "npm install && npm run build"
-  },
-  "deploy": {
-    "startCommand": "npx serve dist -l $PORT",
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  }
-}
-```
-
-### Railpack Environment Variables
-Railpack is the new default builder (Nixpacks is legacy). Configure with env vars:
-
-| Variable | Description |
-|----------|-------------|
-| `RAILPACK_PACKAGES` | Mise packages to install |
-| `RAILPACK_BUILD_APT_PACKAGES` | Apt packages for build |
-| `RAILPACK_DEPLOY_APT_PACKAGES` | Apt packages in final image |
-| `RAILPACK_INSTALL_COMMAND` | Override install command |
-
-See [Railpack docs](https://railpack.com/config/environment-variables) for full options.
-
-### Node / pnpm under Railpack
-- **Auto-detection**: Railpack reads the `packageManager` field in `package.json` first, then falls back to the lockfile (`pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`). Pin the package manager via `"packageManager": "pnpm@10.x.y"` so Corepack installs the exact version — cleaner than `npm install -g pnpm`.
-- **Frozen lockfile by default**: Railpack runs `pnpm install --frozen-lockfile`. If `pnpm-lock.yaml` drifts from `package.json`, builds fail with `ERR_PNPM_OUTDATED_LOCKFILE`. Run `pnpm install` locally and commit the lockfile, or override via `RAILPACK_INSTALL_COMMAND`.
-- **Mixed-lockfile pitfall**: If both `package-lock.json` and `pnpm-lock.yaml` exist and the install step runs `npm ci` (legacy Nixpacks setups), drift in `package-lock.json` silently breaks every deploy. Track only the lockfile that matches your actual package manager and gitignore the other.
-
-### Monorepo Setup
-1. Go to Railway Dashboard > Service > Settings
-2. Set **Root Directory** to `/frontend` or `/backend`
-3. Set **Railway Config File** to absolute path: `/frontend/railway.json`
-4. Set **Watch Paths** using absolute paths: `/frontend/**`
-
-## Running One-off Commands
-
-### Using `railway run` (local command with Railway env vars)
-```bash
-# Injects Railway environment variables into local command
-railway run --service=backend -- python script.py
-```
-
-### Using `railway shell` (subshell with env vars)
-```bash
-# Opens a new shell with all Railway env vars loaded
-railway shell -s <service>
-# Now all commands in this shell have access to env vars
-```
-
-### Using `railway ssh` (run inside container)
-```bash
-# List files in container
-railway ssh -s <service> -- ls -la /
-
-# Run script inside container
-railway ssh -s <service> -- python /app/scripts/some_script.py
-```
-
-## Troubleshooting
-
-- **"No start command found"**: Check Root Directory setting in dashboard
-- **Port issues**: Vite/React apps need `$PORT` environment variable
-- **Environment variables**: Prefix with `VITE_` for build-time availability in Vite apps
-- **Variables syntax**: Use `railway variables --set "KEY=value"` (not `railway variables set`)
-
-## Dashboard Settings Reference (as of 2026-01-22)
-
-The Service > Settings page in the Railway dashboard has these sections:
-
-### Source
-- **Source Repo**: Connected GitHub repo with disconnect option
-- **Root Directory**: Subdirectory for build/deploy (important for monorepos)
-- **Branch**: Which branch triggers deployments for this environment
-- **Wait for CI**: Option to wait for GitHub Actions before deploying
-
-### Networking
-- **Public Networking**:
-  - Railway-generated domain (`*.up.railway.app`) with port configuration
-  - Custom domains with proxy detection
-  - Target port setting for each domain
-- **Private Networking**:
-  - Internal hostname (`<service>.railway.internal`) for service-to-service communication
-  - Can also use short name (`<service>`) within the project
-- **Static Outbound IPs**: Optional permanent IP for outbound traffic
-
-### Build
-- **Builder**: Railpack (new default) or Nixpacks (legacy). Configure via env vars or `railpack.json`
-- **Metal Build Environment**: Faster builds (becoming default)
-- **Providers**: Auto-detected language (Python, Node, etc.)
-- **Custom Build Command**: Override default build command (follows Root Directory)
-- **Watch Paths**: Gitignore-style patterns to trigger deploys on specific path changes
-  - **Note**: Patterns always operate from repo root `/`, even with a Root Directory set. For root directory `/app`, use `/app/**/*.js` to match files.
-
-### Deploy
-- **Custom Start Command**: Command to run the service
-- **Pre-deploy Command**: Runs before the main service starts (e.g., migrations)
-- **Regions**: Select deployment regions and replica count
-- **Teardown**: Configure old deployment termination behavior
-- **Resource Limits**: CPU (up to 32 vCPU) and Memory (up to 32 GB) per replica
-- **Cron Schedule**: Run service on a cron schedule
-- **Healthcheck Path**: Endpoint to verify deployment is live before completing
-- **Serverless**: Scale to zero when idle, wake on traffic
-- **Restart Policy**: What to do on process exit (Never, Always, On Failure with retry count)
-
-### Config-as-code
-- **Railway Config File**: Path to `railway.json` or `railway.toml` for version-controlled settings
-  - **Note**: Does NOT follow Root Directory. Use absolute path like `/backend/railway.toml`
-
-### Root Directory Behavior
-When a Root Directory is set, these settings follow it:
-- Build command, start command, pre-deploy command
-
-These do **NOT** follow Root Directory (always use absolute paths from repo root):
-- **Watch Paths**: Use `/app/**/*.js` not `**/*.js` for root dir `/app`
-- **Railway Config File**: Use `/backend/railway.toml` not `railway.toml`
-
-### Storage Buckets
-Railway provides S3-compatible object storage ("Buckets") as a first-party service.
-
-- **Pricing**: $0.015/GB-month storage. Egress and API calls are **free** (unlimited).
-- **Access**: Private-only (no public URLs). Use presigned URLs or serve through your app.
-- **S3 compatibility**: Full — works with boto3, AWS SDK, any S3 client. Set `endpoint_url` to the bucket endpoint.
-- **Setup**: Dashboard > Add > Storage Bucket. Credentials (endpoint, access key, secret, bucket name) are injected as env vars into linked services.
-- **Limits**: No documented caps on object count or request rate. Billed per storage used.
-- **Compared to alternatives**: Same storage price as Cloudflare R2, cheaper than AWS S3 ($0.023/GB). Unlike R2, no per-operation charges. Unlike S3, no egress fees.
-
-### Danger Zone
-- **Delete Service**: Permanently removes service and all deployments from the environment
-
-## Access Control & Security (as of 2026-08-20)
-
-Key facts for deciding who can see what (sources: docs.railway.com workspaces/project-members/variables, enterprise/access-groups):
-
-- **Workspace roles**: Admin, Member, Deployer. A **Member has access to ALL workspace projects** — including viewing/creating/modifying/deleting env vars, deploying, and creating services. **Deployer** can only view projects and deploy via GitHub commits (no CLI deploys, no variable access, no logs). There is no plain-Pro way to hide one project's env vars from a workspace Member.
-- **Project members** (Project Settings > Members, no workspace membership needed): **Owner / Editor / Viewer**. Editor can deploy and change settings but not delete services/project; **Viewer is read-only and cannot see env vars**. Pro plan = unlimited project members. This is the agency's preferred scoping pattern (see `railway-provision` skill). Caveat: project scoping only restricts people who are NOT also workspace Members — workspace role wins.
-- **Access Groups** (People > Security, Beta): admin-managed groups of people+projects+role that restrict which projects non-admin members can see (applies to dashboard, API, CLI, MCP). Gated behind **committed spend — the unlock dialog quotes $5,000/mo minimum** (verified 2026-08-20), despite docs vaguely saying "eligible committed spend plans". Not worth it below enterprise scale.
-- **Environment RBAC** (restrict e.g. production env to admins): committed spend $2,000/mo tier.
-- **Sealed variables**: per-variable "seal" makes the value write-only — still injected into builds/deploys but never visible again in UI or API, can't be unsealed, excluded from `railway variables`/`railway run`, PR environments, and env duplication. Good for tokens that only the service needs. Set via dashboard variable menu.
-- **Trusted domains** (People > Security): auto-onboards anyone signing up with a matching email domain into the workspace at a chosen role — onboarding automation, NOT a security boundary (default-role Member would grant workspace-wide var access).
-- **Workspace API tokens** authenticate as the workspace and reach every project regardless of Access Groups — treat one like a workspace admin credential; prefer project tokens for single-project integrations.
+`references/access-control.md` before granting access or answering who-can-see-what (also tokens, direct-API auth); `build-config.md`; `storage-buckets.md` (`railway bucket`).
