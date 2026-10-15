@@ -21,6 +21,7 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | **railway-cli** | Railway CLI and GraphQL house rules for agents: bounded logs, deploy verification and NEEDS_APPROVAL, variables without leaking secrets, per-directory linking, build-config traps; fetches Railway's official reference files on demand |
 | **skeleton** | Skeleton UI framework reference for Svelte components |
 | **skill-creator** | Meta-skill for creating new skills with proper structure and best practices |
+| **skill-review** | Review an existing skill without regressing it: usage triage (retire / light / full) from local transcripts, evidence-backed edits, one verification pass, usage-based follow-up |
 | **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |
 | **tailwindcss-skill** | Tailwind CSS v4 fundamentals — installation, CSS-first config, design systems |
 | **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5 + web_search) and deep research (o3-deep-research) |
