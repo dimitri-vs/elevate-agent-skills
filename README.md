@@ -13,17 +13,14 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | Skill | Description |
 |-------|-------------|
 | **clerk** | Clerk authentication — setup, sign-in/sign-up flows, agency workflow for client handover |
-| **clockify-api** | Clockify REST API integration patterns and key endpoints |
 | **codex-review** | Independent code review via OpenAI Codex CLI (WSL) — second-opinion sanity checks |
 | **interface-design** | Interface design guidance for utilitarian apps — dashboards, tools, admin panels, data-heavy UIs |
 | **playwright** | Browser automation via Playwright CLI and MCP — navigation, interaction, auth persistence, parallel sessions |
-| **pydantic-ai** | Pydantic AI agent framework — agents, tools, streaming, multi-agent delegation, FastAPI integration |
 | **railway-cli** | Railway CLI and GraphQL house rules for agents: bounded logs, deploy verification and NEEDS_APPROVAL, variables without leaking secrets, per-directory linking, build-config traps; fetches Railway's official reference files on demand |
 | **skeleton** | Skeleton UI framework reference for Svelte components |
 | **skill-creator** | Meta-skill for creating new skills with proper structure and best practices |
 | **skill-review** | Review an existing skill without regressing it: usage triage (retire / light / full) from local transcripts, evidence-backed edits, one verification pass, usage-based follow-up |
 | **slack-canvas** | Slack CLI — read canvases, conversations, threads, and channel history |
-| **tailwindcss-skill** | Tailwind CSS v4 fundamentals — installation, CSS-first config, design systems |
 | **web-research** | Web research via OpenAI APIs — fast lookups (gpt-5 + web_search) and deep research (o3-deep-research) |
 
 ## Getting Started
@@ -37,7 +34,7 @@ The simplest approach — just copy a skill folder into your project:
 git clone https://github.com/elevatecode/elevate-agent-skills.git
 
 # Copy a skill into your project
-cp -r elevate-agent-skills/pydantic-ai /path/to/your-project/.claude/skills/
+cp -r elevate-agent-skills/humanize /path/to/your-project/.claude/skills/
 ```
 
 ### Use skill-sync.py
@@ -49,7 +46,7 @@ For managing skills across multiple projects, `skill-sync.py` tracks installatio
 python skill-sync.py list
 
 # Add a skill to a project
-python skill-sync.py add clockify-api --to "/path/to/your-project/.claude/skills"
+python skill-sync.py add humanize --to "/path/to/your-project/.claude/skills"
 
 # Check sync status across all projects
 python skill-sync.py status
@@ -58,7 +55,7 @@ python skill-sync.py status
 python skill-sync.py sync
 
 # Sync a specific skill only
-python skill-sync.py sync clockify-api
+python skill-sync.py sync humanize
 
 # Preview changes without writing
 python skill-sync.py sync --dry-run
@@ -67,7 +64,7 @@ python skill-sync.py sync --dry-run
 python skill-sync.py sync --force
 
 # Remove a skill registration
-python skill-sync.py remove clockify-api --from "/path/to/your-project/.claude/skills"
+python skill-sync.py remove humanize --from "/path/to/your-project/.claude/skills"
 
 # Find .claude/skills directories in your projects
 python skill-sync.py discover "/path/to/projects"
