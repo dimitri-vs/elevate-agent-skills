@@ -6,13 +6,15 @@
 """
 Lightweight wrapper around the native Windows `codex exec`.
 
-Handles clean output capture via -o flag, auth profile swapping, and result
-archiving to ~/reviews/. (Migrated from the WSL-based invocation 2026-08-18 —
-Codex CLI now runs natively on Windows.)
+Handles clean output capture, session capture for follow-up turns (--resume),
+optional managed git worktrees (--worktree), the dual-model "ultra" tier, auth
+profile swapping, and result archiving to ~/reviews/. (Migrated from the
+WSL-based invocation 2026-08-18 — Codex CLI now runs natively on Windows.)
 
 Usage:
-    uv run review.py -w "C:\\path\\to\\project" "Your review prompt here"
+    uv run review.py -w "C:\\path\\to\\project" "Your prompt here"
     uv run review.py -w "C:\\path\\to\\project" < prompt.txt
+    uv run review.py --resume <session-id> "Follow-up question"
 """
 
 import argparse
@@ -25,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -40,30 +43,31 @@ CODEX_EXE = (
     or str(Path.home() / "AppData/Local/Programs/OpenAI/Codex/bin/codex.exe")
 )
 
-# Codex CLI model selection notes (as of 2026-09-11):
-# - GPT-6 Astra (gpt-6-astra) GA 2026-09-04: new flagship above the GPT-5.6
-#   family ($10/$50 per 1M API tokens vs sol $4/$20, terra $2/$12). Needs
-#   Codex CLI >= 0.153.0. Efforts low..xhigh, max, ultra; no "none".
-# - GPT-5.6 family (GA 2026-07-09) is NOT deprecated: gpt-5.6-sol (OpenAI now
-#   calls it the "reliable agentic workhorse"), gpt-5.6-terra (balanced),
-#   gpt-5.6-luna (fast/cheap). All work under ChatGPT-account auth.
+# Codex CLI model selection notes (as of 2026-10-15):
+# - GPT-6 Astra (gpt-6-astra, GA 2026-09-04): flagship, $10/$50 per 1M API
+#   tokens. Uses ~1/3 the tokens of sol in the Codex harness, so it finishes
+#   sooner but explores less. Higher precision, lower recall than 5.6 sol on
+#   an independent 50-PR review benchmark; the two find largely different bugs.
+# - GPT-5.6 sol stays the thorough single-model tier (best measured review
+#   recall, incl. low-severity and security finds). Terra is the fast default.
+# - GPT-6.1 Sol (gpt-6.1-sol, 2026-09-29) is Codex's own default since CLI
+#   0.161 but has no review benchmark yet; not in any preset. Try it via
+#   CODEX_REVIEW_MODEL.
+# - "ultra" runs sol@xhigh and astra@high in parallel (two sessions, two saved
+#   files). Astra above `high` bought no new findings in our 2026-09-11
+#   benchmark, and OpenAI's guide puts "careful review" at high.
 # - Under ChatGPT-account auth, Codex does NOT support the floating gpt-5-codex
 #   alias (API-key auth only). ChatGPT users must pass a versioned snapshot.
-# - Three review tiers (2026-09-11 remap): "medium" = terra for the casual
-#   catch-anything-blatant pass (the default), "high" = sol at xhigh for deep
-#   work, "ultra" = astra for the hardest problems. Astra over-tests and
-#   over-engineers small tasks (per OpenAI's own model guide), so the top tier
-#   is opt-in, never the default. "ultra" *reasoning* (multi-agent delegation)
-#   is available on sol and astra but not used by any preset.
-# - Override the model via CODEX_REVIEW_MODEL and the reasoning effort via
-#   --reasoning / CODEX_REVIEW_REASONING (both apply to whatever tier is picked).
 # Per-tier default timeout: xhigh reviews that explore data empirically
 # routinely blow past 30 min (observed 2026-08-31), so sol/astra get an hour.
 EFFORT_PRESETS = {
     "medium": {"model": "gpt-5.6-terra", "reasoning": "high", "timeout": 1800},
     "high":   {"model": "gpt-5.6-sol", "reasoning": "xhigh", "timeout": 3600},
-    "ultra":  {"model": "gpt-6-astra", "reasoning": "xhigh", "timeout": 3600},
+    "astra":  {"model": "gpt-6-astra", "reasoning": "high", "timeout": 3600},
 }
+# "ultra" is not a preset of its own: it runs these tiers in parallel.
+ULTRA_LEGS = ("high", "astra")
+TIERS = (*EFFORT_PRESETS, "ultra")
 # Minimum Codex CLI that accepts each model family (server rejects older clients).
 MODEL_MIN_CLI = {
     "gpt-6-": (0, 153, 0),
@@ -73,28 +77,29 @@ MODEL_MIN_CLI = {
 EFFORT_ALIASES = {
     "normal": "medium", "regular": "medium", "casual": "medium",
     "default": "medium", "med": "medium",
-    "xhigh": "high", "extra-high": "high", "extrahigh": "high",
-    "max": "ultra", "maximum": "ultra", "xxhigh": "ultra", "astra": "ultra",
+    "xhigh": "high", "extra-high": "high", "extrahigh": "high", "sol": "high",
+    "max": "ultra", "maximum": "ultra", "xxhigh": "ultra", "dual": "ultra",
 }
 VALID_REASONING = ("low", "medium", "high", "xhigh", "max", "ultra")
+SANDBOXES = ("read-only", "workspace-write")
 
 
 def resolve_effort(name: str) -> str:
-    """Map a tier name or alias to its canonical preset key."""
+    """Map a tier name or alias to its canonical key."""
     key = name.strip().lower()
     key = EFFORT_ALIASES.get(key, key)
-    if key not in EFFORT_PRESETS:
+    if key not in TIERS:
         raise argparse.ArgumentTypeError(
             f"unknown effort {name!r}; use one of "
-            f"{', '.join(EFFORT_PRESETS)} (aliases: {', '.join(EFFORT_ALIASES)})"
+            f"{', '.join(TIERS)} (aliases: {', '.join(EFFORT_ALIASES)})"
         )
     return key
 
 # Last-known-latest Codex CLI version. Used to surface a non-blocking warning
 # when the user's local CLI is two or more minor versions behind. Bump this
 # periodically. (A model-specific minimum, MODEL_MIN_CLI, warns separately.)
-LAST_KNOWN_CODEX_CLI = (0, 154, 0)
-LAST_KNOWN_CODEX_CLI_DATE = "2026-09-11"
+LAST_KNOWN_CODEX_CLI = (0, 163, 0)
+LAST_KNOWN_CODEX_CLI_DATE = "2026-10-15"
 
 
 def slugify(text: str, max_len: int = 50) -> str:
@@ -264,130 +269,220 @@ def use_profile(name: str | None):
         backup.unlink(missing_ok=True)
 
 
-def run_codex(prompt: str, workdir: str | None = None,
-              sandbox: str | None = None, timeout: int = 1800,
-              effort: str = "medium",
-              account: str | None = None,
-              reasoning: str | None = None) -> tuple[str, int, float, str]:
-    """Run codex exec natively and return (output, exit_code, elapsed_secs, stderr).
+# ---------------------------------------------------------------------------
+# Sessions (follow-up turns)
+# ---------------------------------------------------------------------------
 
-    Default is --yolo mode (no approvals, no sandbox) since nobody is present
-    to approve prompts in non-interactive mode. Pass --sandbox to restrict.
+def parse_events(stdout: str) -> dict:
+    """Pull thread id, last agent message, file edits and warnings from --json output."""
+    info = {"thread_id": None, "message": "", "files": [], "warnings": []}
+    for line in stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        etype = ev.get("type")
+        if etype == "thread.started":
+            info["thread_id"] = ev.get("thread_id")
+        elif etype in ("error", "turn.failed"):
+            # Fatal: e.g. a model refusal or the cyber-safety filter stopping the turn.
+            err = ev.get("error") if isinstance(ev.get("error"), dict) else {}
+            msg = (err.get("message") or ev.get("message") or etype).strip()
+            if f"FATAL: {msg}" not in info["warnings"]:
+                info["warnings"].append(f"FATAL: {msg}")
+        elif etype == "item.completed":
+            item = ev.get("item", {})
+            kind = item.get("type")
+            if kind == "agent_message":
+                info["message"] = item.get("text", "")
+            elif kind == "file_change" and item.get("status") != "failed":
+                for ch in item.get("changes", []):
+                    entry = f"{ch.get('kind', '?')} {ch.get('path', '?')}"
+                    if entry not in info["files"]:
+                        info["files"].append(entry)
+            elif kind == "error" and item.get("message"):
+                if item["message"].strip() not in info["warnings"]:
+                    info["warnings"].append(item["message"].strip())
+    return info
+
+
+def session_cwd(thread_id: str) -> str | None:
+    """Working dir Codex actually used, from the session's rollout file.
+
+    Differs from --workdir under --worktree, and `codex exec resume` has no -C:
+    it runs wherever it is launched, so resumes must start from this directory.
     """
-    model = resolve_model(effort)
-    reasoning = resolve_reasoning(effort, reasoning)
-    # Include PID so concurrent reviews launched in the same second don't
+    sessions = CODEX_HOME / "sessions"
+    for f in sorted(sessions.rglob(f"rollout-*{thread_id}.jsonl"), reverse=True):
+        try:
+            with f.open(encoding="utf-8") as fh:
+                meta = json.loads(fh.readline())
+            return (meta.get("payload") or meta).get("cwd")
+        except Exception:
+            continue
+    return None
+
+
+def _frontmatter(path: Path) -> dict:
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            head = fh.read(2000)
+    except OSError:
+        return {}
+    if not head.startswith("---"):
+        return {}
+    return dict(re.findall(r"^(\w+): (.*)$", head.split("---", 2)[1], re.M))
+
+
+def find_session_review(session: str, workdir: str | None) -> tuple[Path | None, dict]:
+    """Find the saved review for a session id, or the newest one for `last`."""
+    files = sorted(REVIEWS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for f in files:
+        fm = _frontmatter(f)
+        sid = fm.get("session_id")
+        if not sid or sid == "none":
+            continue
+        if session == "last":
+            if workdir and fm.get("directory", "").lower() != workdir.lower():
+                continue
+            return f, fm
+        if sid == session:
+            return f, fm
+    return None, {}
+
+
+# ---------------------------------------------------------------------------
+# Running Codex
+# ---------------------------------------------------------------------------
+
+def run_codex(prompt: str, *, model: str, reasoning: str,
+              workdir: str | None = None, sandbox: str | None = None,
+              timeout: int = 1800, worktree: bool = False,
+              resume_id: str | None = None, label: str = "") -> dict:
+    """Run one `codex exec` (or `exec resume`) turn and return a result dict.
+
+    Default is no sandbox and no approvals, since nobody is present to approve
+    prompts in non-interactive mode. Pass `sandbox` to restrict.
+    """
+    # Include PID + label so concurrent runs (and the two ultra legs) don't
     # share (and clobber) each other's output files.
-    ts = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+    ts = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}{label}"
     output_file = Path(tempfile.gettempdir()) / f"codex_review_{ts}.md"
 
     parts = [CODEX_EXE, "exec"]
+    if resume_id:
+        parts.extend(["resume", resume_id])
     parts.extend(["-m", model])
     parts.extend(["-c", f"model_reasoning_effort={reasoning}"])
     parts.extend(["-c", "model_reasoning_summary=none"])
-    parts.append("-")  # read prompt from stdin
-    if sandbox:
+    if sandbox and resume_id:
+        # `exec resume` has no -s and does NOT inherit the first turn's sandbox
+        # (openai/codex#40149): a resumed read-only session can write. Re-pass it.
+        parts.extend(["-c", f'sandbox_mode="{sandbox}"'])
+    elif sandbox:
         parts.extend(["-s", sandbox])
     else:
-        parts.append("--yolo")
-    parts.extend(["-o", str(output_file)])
-    if workdir:
+        parts.append("--dangerously-bypass-approvals-and-sandbox")
+    if workdir and not resume_id:
         parts.extend(["-C", workdir])
-    parts.append("--skip-git-repo-check")
-
-    mode = f"sandbox: {sandbox}" if sandbox else "yolo (no approvals/sandbox)"
-    print(f"Starting Codex review...", file=sys.stderr)
-    print(f"  Directory: {workdir or '(current)'}", file=sys.stderr)
-    if account:
-        print(f"  Account:   {account}", file=sys.stderr)
-    print(f"  Mode:      {mode}", file=sys.stderr)
-    print(f"  Effort:    {effort} (model={model}, reasoning={reasoning})", file=sys.stderr)
-    print(f"  Timeout:   {timeout // 60}m", file=sys.stderr)
-    check_codex_version(model)
+    if worktree:
+        parts.append("--worktree")
+    parts.extend(["--json", "-o", str(output_file), "--skip-git-repo-check", "-"])
 
     start = time.time()
+    timed_out = False
+    proc = subprocess.Popen(
+        parts, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        # resume runs wherever it is launched (no -C); see session_cwd().
+        cwd=workdir if resume_id and workdir else None,
+    )
     try:
-        result = subprocess.run(
-            parts, input=prompt,
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        elapsed = time.time() - start
-        print(f"ERROR: Timed out after {int(elapsed)}s", file=sys.stderr)
-
-        # Recover whatever we can from the timed-out process.
-        # exc.stdout/.stderr contain output captured before the kill.
-        stderr_out = exc.stderr or b""
-        if isinstance(stderr_out, bytes):
-            stderr_out = stderr_out.decode("utf-8", errors="replace")
-        partial = exc.stdout or b""
-        if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", errors="replace")
-        partial = partial.strip()
-
-        # Try reading the -o file. Codex writes it only on TaskComplete so
-        # it's usually empty after a timeout, but it's free to check.
-        if not partial and output_file.exists():
-            try:
-                partial = output_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
-
-        if partial:
-            print(f"  Recovered {len(partial)} chars of partial output", file=sys.stderr)
-
-        return partial, 1, elapsed, stderr_out.strip()
-
+        stdout, stderr = proc.communicate(prompt, timeout=timeout)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        # Kill the whole tree: Codex may have started test runners or dev
+        # servers that would otherwise keep running (and writing) after we exit.
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+        else:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        code = 1
+    stdout, stderr = stdout or "", stderr or ""
     elapsed = time.time() - start
-    mins, secs = int(elapsed // 60), int(elapsed % 60)
-    print(f"  Completed in {mins}m {secs}s (exit code {result.returncode})", file=sys.stderr)
 
-    # Surface stderr from Codex process (auth errors, model errors, crashes)
-    if result.stderr and result.stderr.strip():
-        stderr_lines = result.stderr.strip().splitlines()
-        # Show up to 20 lines to avoid flooding
-        preview = stderr_lines[:20]
-        print(f"  Codex stderr ({len(stderr_lines)} lines):", file=sys.stderr)
-        for line in preview:
-            print(f"    {line}", file=sys.stderr)
-        if len(stderr_lines) > 20:
-            print(f"    ... ({len(stderr_lines) - 20} more lines)", file=sys.stderr)
-
-    # Read clean output from -o file
+    info = parse_events(stdout)
+    # -o holds the final message; it's only written on TaskComplete, so after a
+    # timeout the last agent_message from the event stream is the best partial.
     response = ""
     if output_file.exists():
         try:
             response = output_file.read_text(encoding="utf-8").strip()
         except Exception:
             pass
+    if not response:
+        response = info["message"].strip()
 
-    # Fallback to stdout if -o didn't capture
-    if not response and result.stdout:
-        response = result.stdout.strip()
+    mins, secs = int(elapsed // 60), int(elapsed % 60)
+    tag = f" [{label.strip('_')}]" if label else ""
+    if timed_out:
+        print(f"ERROR{tag}: Timed out after {int(elapsed)}s", file=sys.stderr)
+        if response:
+            print(f"  Recovered {len(response)} chars of partial output", file=sys.stderr)
+    else:
+        print(f"  Completed{tag} in {mins}m {secs}s (exit code {code})", file=sys.stderr)
 
-    return response, result.returncode, elapsed, result.stderr or ""
+    # Surface stderr from Codex process (auth errors, model errors, crashes)
+    noise = re.compile(r"oauth::refresh_transaction|failed to refresh OAuth tokens")
+    stderr_lines = [l for l in stderr.strip().splitlines() if l.strip() and not noise.search(l)]
+    if stderr_lines:
+        print(f"  Codex stderr{tag} ({len(stderr_lines)} lines):", file=sys.stderr)
+        for line in stderr_lines[:20]:
+            print(f"    {line}", file=sys.stderr)
+        if len(stderr_lines) > 20:
+            print(f"    ... ({len(stderr_lines) - 20} more lines)", file=sys.stderr)
+
+    thread_id = info["thread_id"] or resume_id
+    cwd = session_cwd(thread_id) if thread_id else None
+    if cwd is None and not worktree:
+        # Under --worktree the main checkout is never the right answer.
+        cwd = workdir
+    return {
+        "response": response, "exit_code": code, "elapsed": elapsed,
+        "stderr": stderr, "timed_out": timed_out, "thread_id": thread_id,
+        "cwd": cwd, "files": info["files"], "warnings": info["warnings"],
+        "model": model, "reasoning": reasoning,
+    }
 
 
-def save_review(response: str, workdir: str | None, prompt: str,
-                *, status: str = "success", exit_code: int = 0,
-                elapsed: float = 0, stderr: str = "",
-                effort: str = "medium",
-                account: str | None = None,
-                reasoning: str | None = None) -> Path:
-    """Save review to ~/reviews/ with YAML frontmatter."""
+def status_of(res: dict) -> str:
+    if res["timed_out"]:
+        return "timeout"
+    if res["exit_code"] != 0:
+        return "error"
+    return "success" if res["response"] else "no_output"
+
+
+def save_review(res: dict, workdir: str | None, prompt: str, *,
+                effort: str, sandbox: str | None, account: str | None,
+                worktree: bool, leg: str = "") -> Path:
+    """Save a new review to ~/reviews/ with YAML frontmatter."""
     REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
     project_slug = slugify(PureWindowsPath(workdir).name) if workdir else "general"
+    if leg:
+        project_slug += f"_{leg}"
 
-    filepath = REVIEWS_DIR / f"{date_str}_{project_slug}.md"
-    counter = 2
-    while filepath.exists():
-        filepath = REVIEWS_DIR / f"{date_str}_{project_slug}_{counter}.md"
-        counter += 1
-
-    mins, secs = int(elapsed // 60), int(elapsed % 60)
+    status = status_of(res)
+    mins, secs = int(res["elapsed"] // 60), int(res["elapsed"] % 60)
     frontmatter = (
         f"---\n"
         f"date: {now.isoformat()}\n"
@@ -395,48 +490,112 @@ def save_review(response: str, workdir: str | None, prompt: str,
         f"reviewer: codex\n"
         f"account: {account or 'default'}\n"
         f"effort: {effort}\n"
-        f"model: {resolve_model(effort)}\n"
-        f"reasoning: {resolve_reasoning(effort, reasoning)}\n"
+        f"model: {res['model']}\n"
+        f"reasoning: {res['reasoning']}\n"
+        f"sandbox: {sandbox or 'none'}\n"
+        f"session_id: {res['thread_id'] or 'none'}\n"
+        f"codex_cwd: {res['cwd'] or 'N/A'}\n"
+        f"worktree: {'yes' if worktree else 'no'}\n"
+        f"turns: 1\n"
         f"status: {status}\n"
-        f"exit_code: {exit_code}\n"
+        f"exit_code: {res['exit_code']}\n"
         f"elapsed: {mins}m {secs}s\n"
         f"---\n\n"
     )
 
-    body = f"## Prompt\n\n{prompt}\n\n---\n\n"
+    body = f"## Prompt\n\n{prompt}\n\n---\n\n" + _result_body(res, status, "##")
+    # Exclusive create, so concurrent runs on the same project can't both
+    # claim the same free filename and overwrite each other.
+    counter = 1
+    while True:
+        suffix = f"_{counter}" if counter > 1 else ""
+        filepath = REVIEWS_DIR / f"{date_str}_{project_slug}{suffix}.md"
+        try:
+            with filepath.open("x", encoding="utf-8") as fh:
+                fh.write(frontmatter + body)
+            return filepath
+        except FileExistsError:
+            counter += 1
+
+
+def _result_body(res: dict, status: str, h: str) -> str:
     if status == "success":
-        body += f"## Review\n\n{response}\n"
+        body = f"{h} Review\n\n{res['response']}\n"
     else:
-        body += f"## Failure\n\n**Status:** {status}\n**Exit code:** {exit_code}\n\n"
-        if response:
-            body += f"### Partial Output\n\n{response}\n\n"
-        if stderr:
-            body += f"### Stderr\n\n```\n{stderr.strip()}\n```\n"
-        if not response and not stderr:
-            body += "No output or error details captured.\n"
+        body = f"{h} Failure\n\n**Status:** {status}\n**Exit code:** {res['exit_code']}\n\n"
+        if res["response"]:
+            body += f"{h}# Partial Output\n\n{res['response']}\n\n"
+        if res["stderr"].strip():
+            body += f"{h}# Stderr\n\n```\n{res['stderr'].strip()}\n```\n"
+    if res["files"]:
+        body += f"\n{h}# Files changed by Codex\n\n" + "".join(f"- {f}\n" for f in res["files"])
+    return body
 
-    filepath.write_text(frontmatter + body, encoding="utf-8")
-    return filepath
 
+def append_followup(path: Path, prompt: str, res: dict) -> None:
+    """Append a resumed turn to the session's saved review and bump `turns`."""
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"^turns: (\d+)$", text, re.M)
+    turn = int(m.group(1)) + 1 if m else 2
+    if m:
+        text = text[:m.start()] + f"turns: {turn}" + text[m.end():]
+    status = status_of(res)
+    mins, secs = int(res["elapsed"] // 60), int(res["elapsed"] % 60)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    text += (
+        f"\n---\n\n## Turn {turn} ({stamp}, {mins}m {secs}s, {status})\n\n"
+        f"### Prompt\n\n{prompt}\n\n" + _result_body(res, status, "###")
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def footer(res: dict, worktree: bool) -> str:
+    """Session handle printed after the reply (or failure) so the caller can follow up."""
+    lines = []
+    status = status_of(res)
+    if status != "success":
+        lines.append(f"STATUS: {status} (exit code {res['exit_code']})")
+    lines.extend(w.splitlines()[0] for w in res["warnings"] if w.startswith("FATAL"))
+    if res["files"]:
+        lines.append("Files changed by Codex (patch edits; shell writes are not listed): "
+                     + "; ".join(res["files"]))
+    if worktree:
+        lines.append(f"Codex working dir (inside its worktree, detached HEAD): "
+                     f"{res['cwd'] or 'unknown - check git worktree list'}")
+    if res["thread_id"]:
+        lines.append(f"Codex session: {res['thread_id']}  "
+                     f"(follow up: uv run review.py --resume {res['thread_id']} \"...\")")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Codex CLI review wrapper (native Windows)")
-    parser.add_argument("prompt", nargs="?", help="Review prompt (or pipe via stdin)")
+    parser = argparse.ArgumentParser(description="Codex CLI review/consult wrapper (native Windows)")
+    parser.add_argument("prompt", nargs="?", help="Prompt (or pipe via stdin)")
     parser.add_argument("-w", "--workdir", help="Project directory (Windows path)")
-    parser.add_argument("-s", "--sandbox", default=None,
-                        choices=["read-only", "workspace-write"],
-                        help="Use sandbox instead of default --yolo mode")
+    parser.add_argument("-s", "--sandbox", default=None, choices=SANDBOXES,
+                        help="Use a sandbox instead of the default no-sandbox mode")
     parser.add_argument("--timeout", type=int, default=None,
                         help="Timeout in seconds (default: per tier - "
-                             "1800 for medium, 3600 for high/ultra)")
+                             "1800 for medium, 3600 for the others)")
     parser.add_argument("-e", "--effort", default="medium", type=resolve_effort,
-                        help="Review tier: medium (default; aliases normal/regular/casual) = "
-                             "gpt-5.6-terra@high, high (alias xhigh) = gpt-5.6-sol@xhigh, "
-                             "ultra (aliases max/xxhigh) = gpt-6-astra@xhigh. "
+                        help="Tier: medium (default) = gpt-5.6-terra@high, "
+                             "high (alias xhigh) = gpt-5.6-sol@xhigh, astra = gpt-6-astra@high, "
+                             "ultra (aliases max/xxhigh) = high + astra in parallel. "
                              "Override model via CODEX_REVIEW_MODEL env var.")
     parser.add_argument("--reasoning", default=None,
                         help="Override the tier's reasoning effort "
                              f"({'/'.join(VALID_REASONING)}). Env: CODEX_REVIEW_REASONING.")
+    parser.add_argument("--worktree", action="store_true",
+                        help="Run in a new Codex-managed git worktree (detached HEAD) so "
+                             "Codex's edits can't collide with yours")
+    parser.add_argument("--resume", metavar="SESSION_ID",
+                        help="Send a follow-up turn to an earlier session (id from the "
+                             "previous output, or 'last' for the newest saved one, "
+                             "filtered by -w if given)")
     parser.add_argument("--no-save", action="store_true",
                         help="Don't save results to ~/reviews/")
     parser.add_argument("--accounts", action="store_true",
@@ -444,7 +603,7 @@ def main():
     parser.add_argument("--account-setup", metavar="NAME",
                         help="Save current Codex login as a named profile")
     parser.add_argument("-a", "--account", metavar="NAME",
-                        help="Use a named auth profile for this review")
+                        help="Use a named auth profile for this run")
     args = parser.parse_args()
 
     if args.accounts:
@@ -468,40 +627,137 @@ def main():
     if not prompt:
         parser.error("Empty prompt")
 
-    timeout = args.timeout or EFFORT_PRESETS[args.effort]["timeout"]
+    if args.resume:
+        return resume_main(args, prompt)
+
+    if args.effort == "ultra" and args.worktree:
+        parser.error("--worktree is for delegated edits; use a single tier, not ultra")
+    if args.worktree:
+        # Managed worktrees start from committed HEAD: staged, modified and
+        # untracked work is all absent from Codex's copy.
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=args.workdir,
+                               capture_output=True, text=True).stdout.strip()
+        if dirty:
+            n = len(dirty.splitlines())
+            print(f"  ⚠️  {n} uncommitted change(s) in {args.workdir or 'the current dir'} will "
+                  f"NOT be in Codex's worktree (it starts from committed HEAD)", file=sys.stderr)
+    if args.effort == "ultra" and os.getenv("CODEX_REVIEW_MODEL"):
+        print("  ⚠️  CODEX_REVIEW_MODEL is ignored for ultra (it would make both legs "
+              "the same model)", file=sys.stderr)
+
+    legs = ULTRA_LEGS if args.effort == "ultra" else (args.effort,)
+    plans = []
+    for leg in legs:
+        model = (EFFORT_PRESETS[leg]["model"] if args.effort == "ultra"
+                 else resolve_model(leg))
+        reasoning = resolve_reasoning(leg, args.reasoning)
+        timeout = args.timeout or EFFORT_PRESETS[leg]["timeout"]
+        plans.append((leg, model, reasoning, timeout))
+
+    mode = f"sandbox: {args.sandbox}" if args.sandbox else "no sandbox, no approvals"
+    print("Starting Codex...", file=sys.stderr)
+    print(f"  Directory: {args.workdir or '(current)'}"
+          + ("  (in a new managed worktree)" if args.worktree else ""), file=sys.stderr)
+    if args.account:
+        print(f"  Account:   {args.account}", file=sys.stderr)
+    print(f"  Mode:      {mode}", file=sys.stderr)
+    for leg, model, reasoning, timeout in plans:
+        print(f"  Effort:    {leg} (model={model}, reasoning={reasoning}, "
+              f"timeout {timeout // 60}m)", file=sys.stderr)
+        check_codex_version(model)
+
+    def run(plan):
+        leg, model, reasoning, timeout = plan
+        return run_codex(prompt, model=model, reasoning=reasoning, workdir=args.workdir,
+                         sandbox=args.sandbox, timeout=timeout, worktree=args.worktree,
+                         label=f"_{leg}" if len(plans) > 1 else "")
 
     with use_profile(args.account):
-        response, exit_code, elapsed, stderr = run_codex(
-            prompt, args.workdir, args.sandbox, timeout, args.effort,
-            account=args.account, reasoning=args.reasoning,
-        )
+        if len(plans) > 1:
+            with ThreadPoolExecutor(max_workers=len(plans)) as pool:
+                results = list(pool.map(run, plans))
+        else:
+            results = [run(plans[0])]
 
-    if exit_code != 0:
-        status = "error"
-        print(f"ERROR: Codex exited with code {exit_code}", file=sys.stderr)
-    elif response:
-        status = "success"
-    else:
-        status = "no_output"
-        print("ERROR: No response from Codex", file=sys.stderr)
+    outputs = []
+    for (leg, model, reasoning, _), res in zip(plans, results):
+        status = status_of(res)
+        if status != "success":
+            print(f"ERROR [{leg}]: {status} (exit code {res['exit_code']})", file=sys.stderr)
+        for w in res["warnings"]:
+            print(f"  Codex warning [{leg}]: {w.splitlines()[0]}", file=sys.stderr)
+        if not args.no_save:
+            try:
+                # Ultra legs record their own tier so --resume restores the right preset.
+                saved = save_review(res, args.workdir, prompt, effort=leg,
+                                    sandbox=args.sandbox, account=args.account,
+                                    worktree=args.worktree,
+                                    leg=leg if len(plans) > 1 else "")
+                print(f"Saved to: {saved}", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: Could not save: {e}", file=sys.stderr)
+        text = res["response"] or "(no reply from Codex)"
+        if len(plans) > 1:
+            text = f"# {leg}: {model} @ {reasoning}\n\n{text}"
+        outputs.append(text + "\n\n---\n" + footer(res, args.worktree))
 
-    if not args.no_save:
-        try:
-            saved = save_review(
-                response, args.workdir, prompt,
-                status=status, exit_code=exit_code,
-                elapsed=elapsed, stderr=stderr,
-                effort=args.effort,
-                account=args.account, reasoning=args.reasoning,
-            )
-            print(f"Saved to: {saved}", file=sys.stderr)
-        except Exception as e:
-            print(f"Warning: Could not save: {e}", file=sys.stderr)
-
-    if not response:
+    # Always print, so session ids and worktree paths survive failures; exit
+    # non-zero if any leg failed, even when another leg (or a partial) has text.
+    print("\n\n".join(outputs))
+    if any(status_of(r) != "success" for r in results):
         sys.exit(1)
 
-    print(response)
+
+def resume_main(args, prompt: str) -> None:
+    path, fm = find_session_review(args.resume, args.workdir)
+    if path is None and args.resume == "last":
+        sys.exit("No saved review with a session id found"
+                 + (f" for {args.workdir}" if args.workdir else ""))
+    session = fm.get("session_id") or args.resume
+    if path is None:
+        print(f"  ⚠️  No saved review for session {session}; using -e/-s from this "
+              f"command line (default medium, no sandbox)", file=sys.stderr)
+    sandbox = fm.get("sandbox") if path else args.sandbox
+    sandbox = args.sandbox or (sandbox if sandbox in SANDBOXES else None)
+    fm_effort = fm.get("effort")
+    leg = fm_effort if fm_effort in EFFORT_PRESETS else args.effort
+    if leg == "ultra":
+        leg = "high"
+    model = fm.get("model") or resolve_model(leg)
+    reasoning = resolve_reasoning(leg, args.reasoning or fm.get("reasoning"))
+    cwd = session_cwd(session) or (fm.get("codex_cwd") if fm.get("codex_cwd") != "N/A" else None) \
+        or fm.get("directory") or args.workdir
+    if cwd == "N/A":
+        cwd = None
+    if cwd and not Path(cwd).is_dir():
+        sys.exit(f"Session {session} ran in {cwd}, which no longer exists (worktree removed?). "
+                 f"Start a fresh run instead.")
+    timeout = args.timeout or EFFORT_PRESETS[leg]["timeout"]
+    worktree = fm.get("worktree") == "yes"
+
+    print(f"Resuming Codex session {session}...", file=sys.stderr)
+    print(f"  Directory: {cwd or '(current)'}", file=sys.stderr)
+    print(f"  Mode:      {'sandbox: ' + sandbox if sandbox else 'no sandbox, no approvals'}",
+          file=sys.stderr)
+    print(f"  Model:     {model} (reasoning={reasoning}, timeout {timeout // 60}m)", file=sys.stderr)
+
+    account = args.account or (fm.get("account") if fm.get("account") not in (None, "default") else None)
+    with use_profile(account):
+        res = run_codex(prompt, model=model, reasoning=reasoning, workdir=cwd,
+                        sandbox=sandbox, timeout=timeout, resume_id=session)
+
+    status = status_of(res)
+    if status != "success":
+        print(f"ERROR: {status} (exit code {res['exit_code']})", file=sys.stderr)
+    if path and not args.no_save:
+        try:
+            append_followup(path, prompt, res)
+            print(f"Appended to: {path}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Could not save: {e}", file=sys.stderr)
+    print((res["response"] or "(no reply from Codex)") + "\n\n---\n" + footer(res, worktree))
+    if status != "success":
+        sys.exit(1)
 
 
 if __name__ == "__main__":

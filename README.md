@@ -13,7 +13,7 @@ Think of them as **reusable documentation snippets optimized for AI agents** rat
 | Skill | Description |
 |-------|-------------|
 | **clerk** | Clerk authentication — setup, sign-in/sign-up flows, agency workflow for client handover |
-| **codex-review** | Independent code review via OpenAI Codex CLI (WSL) — second-opinion sanity checks |
+| **codex-review** | OpenAI Codex CLI as a second agent from a different model family: reviews, second opinions, and delegated tasks in their own git worktree, with follow-up turns via session resume |
 | **interface-design** | Interface design guidance for utilitarian apps — dashboards, tools, admin panels, data-heavy UIs |
 | **playwright** | Browser automation via Playwright CLI and MCP — navigation, interaction, auth persistence, parallel sessions |
 | **railway-cli** | Railway CLI and GraphQL house rules for agents: bounded logs, deploy verification and NEEDS_APPROVAL, variables without leaking secrets, per-directory linking, build-config traps; fetches Railway's official reference files on demand |
