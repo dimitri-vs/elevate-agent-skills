@@ -147,14 +147,16 @@ That way a fallback to stale screenshots is visible.
 
 The session keeps everything Codex already read, so a follow-up is cheaper and better informed than a fresh run that re-explains the context.
 
-**Resume when:**
-- You checked a finding and think it's wrong. Quote it, give your evidence (file:line, output), and ask Codex to defend or withdraw it.
-- You fixed something and want it to check the fix ("I changed X in file Y; does that resolve finding 2?").
+**One round is the default.** Fixing a finding does not send it back to Codex: verify the fix yourself (a test that fails without it, a rerun of the query) and move on. Don't resume to get fixes signed off or to invite pushback on findings you chose not to act on.
+
+**Resume only when:**
+- You checked a finding and think it's wrong, and it matters. Quote it, give your evidence (file:line, output), and ask Codex to defend or withdraw it.
 - Codex asked a question or flagged missing context, and you can supply it.
 - A delegated task needs another iteration.
+- The user asks for a recheck.
 
 **Keep it bounded.**
-- Stop after about 3 rounds on the same disagreement. Models tend to cave rather than converge, so a long back-and-forth produces agreement, not truth.
+- Stop after one or two rounds on the same disagreement. Models tend to cave rather than converge, so a long back-and-forth produces agreement, not truth.
 - If you still disagree, put both positions in front of the user, with the evidence for each.
 
 Give new facts in each turn, not just "are you sure?".
@@ -189,7 +191,7 @@ Without `--worktree`, Codex edits the main tree directly. That's fine only when 
 
 Codex is an independent agent and is sometimes wrong. One controlled study found that unverified Codex review of Claude's code *lowered* accuracy. Verify each claim (read the code, run the query) before acting on it or relaying it.
 
-- **Act:** confirmed bugs, factual errors, important gaps. Fix them, or for advisory reviews, put them in front of the user.
+- **Act:** confirmed bugs, factual errors, important gaps. Fix them and verify the fix yourself (no Codex recheck), or for advisory reviews, put them in front of the user.
 - **Dispute:** claims you checked and believe are wrong. `--resume` with your evidence when it matters; otherwise note the disagreement.
 - **Note:** debatable or out-of-scope items. Mention them, don't act on them.
 - **Drop:** generic advice ("add more tests", "add docs").
