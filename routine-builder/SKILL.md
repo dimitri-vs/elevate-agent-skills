@@ -184,6 +184,53 @@ urllib.request.urlopen(urllib.request.Request(
 
 Send ntfy on every run (success count or "all clear") so silence = something broke.
 
+### Delivery design: write for a 3-second skim (added 2026-10-26)
+
+Dimitri does not read routine emails. He skims the subject and the first block for
+about three seconds, answers one question ("do I have to do anything?"), and moves
+on. Design every delivery for that reader. The agent that follows up reads the
+audit-trail file, never the email. Evidence: an `ACTION` item re-emailed four runs
+over 11 days (IKOO card pause, Oct 2026) was never acted on; it took 30 seconds once
+it showed up in an interactive session's checklist.
+
+1. **Email is for exceptions only.** A clean run sends one ntfy line and no email
+   (silence still means the routine broke, so the ntfy is mandatory). An email means
+   "you must act" or "the routine failed". A weekly "all fine" email trains him to
+   ignore the one that matters.
+2. **The subject is the email.** Verdict + count + the ask, nothing about the run:
+   `ACTION (2): pause card 1052 by 11/09, approve 1 DM` /
+   `FAILED: xero-weekly-close, Upwork token refresh`. Never a gist of what happened.
+3. **First block = the asks**, a numbered list of imperatives: verb + object +
+   deadline + effort + where. `1. Pause Privacy card 1052 (Ikechi) before 11/09 -
+   1 min, Privacy > Cards > pause`. No background inside the item.
+4. **Background goes below a visible "Details (skip)" divider.** Diagnosis prose
+   belongs in the audit file; in the email it is optional reading.
+5. **Repeat asks escalate, they never re-explain.** `(3rd ask, 11 days)` in the
+   subject and on the item. Identical-looking emails get banner blindness.
+6. **Use the channel he already acts in.** If an interactive session exists in the
+   routine's cycle (the Monday weekly-close chat), write the asks into that
+   session's checklist file and drop them from the email. Email then becomes a
+   pulse, or nothing.
+7. **Mobile first.** Gmail shows ~90 characters of body under the subject. Body
+   line 1 is the first ask, not a heading, not "Good news first".
+8. **One banner, one list.** If everything is bold, nothing is.
+
+Examples:
+
+```
+OK run      ntfy only:  "xero-weekly-close OK · 1 payout applied · Monday: 0 decisions, 2 holds"
+ACTION      subject:    "ACTION (1, 2nd ask): pause Privacy 1052 (Ikechi) before 11/09"
+            body:       1. Pause Privacy card 1052 (Ikechi) before 11/09 - 1 min, Privacy > Cards.
+                           Then: claude -r <uuid> "I paused IKOO, mark paused + update roster"
+                        ---- Details (skip) ----
+                        No reply since 10/10 ... (diagnosis, numbers, audit path)
+FAILED      subject:    "FAILED: xero-weekly-close - fetch_upwork_ledger 401 after 3 retries"
+            body:       Upwork rail not assessed; Stripe + Wise ran clean. Re-run: <command>. Log: <path>
+```
+
+The re-entry footer below is the "how to act" half of the same design; keep it on
+every ACTION email.
+
 ### Re-entry footer (shared component, added 2026-09-05)
 
 Any routine that stages a decision for Dimitri (approvals, a draft to polish) must make it trivial to drop back into *that run's* session. Every Desktop routine run is a normal Claude Code session: its transcript is `~/.claude/projects/<cwd-slug>/<uuid>.jsonl`, the Desktop index (`%APPDATA%\Claude\claude-code-sessions\<acct>\<org>\local_<id>.json`) maps `scheduledTaskId` -> `cliSessionId`, and the routine reads its own id from `$CLAUDE_CODE_SESSION_ID` in any Bash step. `claude --resume <uuid>` works from any directory (verified 2026-09-05).
