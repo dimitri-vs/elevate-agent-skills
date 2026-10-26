@@ -8,8 +8,8 @@ description: Design, create, and maintain Claude Code Desktop routines (local sc
 Guide for creating and maintaining Claude Code Desktop routines - local scheduled tasks that run on the user's machine at cron intervals.
 
 Full reference docs (read only when this skill doesn't answer the question - e.g. cloud vs local mode tradeoffs, storage/backup internals, MSIX path quirks):
-- `C:\Users\Dimitri\Code\elevate-vault\playbook\Scheduling - CLI, Desktop, Cloud.md` - Cloud Routine vs Desktop local vs `/loop` decision guide, catch-up behavior details
-- `C:\Users\Dimitri\Code\elevate-vault\playbook\Where Claude Stores Things - Chat, Cowork, Code.md` - where prompts/schedules/skills live on disk across Chat/Cowork/Code, backup advice
+- `C:\Users\Dimitri\elevate-vault\playbook\Scheduling - CLI, Desktop, Cloud.md` - Cloud Routine vs Desktop local vs `/loop` decision guide, catch-up behavior details
+- `C:\Users\Dimitri\elevate-vault\playbook\Where Claude Stores Things - Chat, Cowork, Code.md` - where prompts/schedules/skills live on disk across Chat/Cowork/Code, backup advice
 
 ## When to Use
 
