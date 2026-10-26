@@ -192,10 +192,15 @@ uv run ms_teams.py send "<chat link>" -f draft.md --dry-run             # previe
 > channel message link replies in that thread automatically; `--new-post`
 > overrides) or `--reply-to <link or id>`. Any message in the thread works -
 > the root is found for you.
-> **Chats have no threads.** A plain `send` is normal in an active 1:1.
-> When answering a specific *earlier* message, or when several topics are
-> interleaved, quote-reply it with `--reply-to <message link or id>` so the
-> answer shows what it refers to.
+> **Chats have no threads.** A plain `send` is the default in a chat. Look at
+> the last message first: if it is the one you're answering (or the same
+> person's burst that ends with it), do NOT `--reply-to` it; quoting the message
+> right above yours is noise (Dimitri, 2026-10-26). Quote-reply with
+> `--reply-to <message link or id>` only when the chat has moved on since the
+> message you're answering, or several topics are interleaved, so the reader
+> would otherwise not know what the answer refers to. Session or ticket notes
+> that say "quote-reply her 3:53 PM message" name the message to answer, not
+> an instruction to quote it.
 > **You can't move a message.** Posted in the wrong place? `delete <link> --yes`,
 > then resend correctly.
 
