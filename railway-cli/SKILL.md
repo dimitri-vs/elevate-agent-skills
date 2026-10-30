@@ -19,11 +19,11 @@ What `--help` won't tell you, for CLI 5.x. Check `railway --version` first: 4.x 
 - Environment names are case-sensitive (`Staging` is not `staging`). `environment list` takes no `-p`; when unlinked: `railway api 'query($id:String!){project(id:$id){environments{edges{node{name id}}} services{edges{node{name id}}}}}' --raw-var id=<projectId>`.
 - Prompts hang the shell. Non-interactive forms: `railway link -p <id> -e <env> -s <svc>`, `railway init -n <name> -w <workspace> --json`, `railway add --service <name> --json` (or `--database`/`--repo`/`--image`; one is required).
 - For what the CLI lacks use `railway api` (`search`/`describe` first); don't read `~/.railway/config.json` or hand-roll bearer auth.
-- `whoami` can pass while project calls say "Unauthorized": preflight with a project-scoped read (`deployment list -p -e -s --limit 1 --json`). If `railway list` fails too, ask the user to run `railway login`; otherwise check target and role (workspace Deployers get no CLI logs or variables, project Viewers no variables).
+- `whoami` can pass while project calls say "Unauthorized": preflight with a project-scoped read (`deployment list -p -e -s --limit 1 --json`). If `railway list` fails too, ask the user to run `railway login`; otherwise check target and role (workspace Deployers get no CLI logs or variables, project Viewers no variables). Don't name your own shell variables `RAILWAY_*`; the CLI reads that namespace as config.
 
 ## Logs: a window, never a stream
 
-`railway logs -s <svc> -e <env> --since 3h --json` (or `--lines 200`). Bare `railway logs` streams until killed, piped or not; only `--lines`/`--since`/`--until` stop it (a deployment ID doesn't). A 30s+ timeout is just a backstop, and an empty killed stream means unknown. All stderr is tagged `level:error`, access logs included: classify by message.
+`railway logs -s <svc> -e <env> --since 3h --lines 5000 --json`. A window without `--lines` returns only the newest 500 lines, and `--lines` caps at 5000 (more is `Error in limit`, exit 1, which reads as zero lines under `2>/dev/null`). Exactly 500 or 5000 lines back means truncated: page back with `--until <oldest timestamp>`. Deployment IDs must be full UUIDs; an 8-char prefix is "Deployment not found". Bare `railway logs` streams until killed, piped or not; only `--lines`/`--since`/`--until` stop it (a deployment ID doesn't). A 30s+ timeout is just a backstop, and an empty killed stream means unknown. All stderr is tagged `level:error`, access logs included: classify by message.
 
 ## Deploy status
 
@@ -34,7 +34,7 @@ What `--help` won't tell you, for CLI 5.x. Check `railway --version` first: 4.x 
 - `SKIPPED` on a cron service is a skipped tick; read `meta.skippedReason` ("did not become ready" = the deploy behind it was stuck). Elsewhere it usually means watch paths.
 - `QUEUED`/`INITIALIZING`/`BUILDING`/`DEPLOYING` can take minutes. Poll with a deadline (until-loop or the harness's monitor tool), never `sleep N; railway ...`; stop on terminal or approval states.
 - `WAITING` (docs: "waiting for approval") and `NEEDS_APPROVAL` won't progress alone. Documented bypass: author is a workspace Deployer+ with GitHub connected (field fix: project invite + connected GitHub). Approve only after the user OKs it: `railway api 'mutation($id:String!){deploymentApprove(id:$id)}' --raw-var id=<depId>`.
-- Merged but no deployment for that `commitHash`: rule out the gate and `SKIPPED`, then propose `railway redeploy --from-source -p -e -s`.
+- Merged but no deployment for that `commitHash`: rule out the gate and `SKIPPED`, then propose `railway redeploy --from-source -p -e -s`. "Deploys have been paused temporarily" (platform incident) drops pushes instead of queueing them: redeploy each affected service once builds resume.
 
 **Past stalls** (the gate is visible only while it waits). Explain earlier `SKIPPED`/`REMOVED`/never-built records from metadata, printing only what answers the question:
 1. Creators: `railway api 'query($s:String!,$e:String!){deployments(first:30,input:{serviceId:$s,environmentId:$e,includeDeleted:true}){edges{node{id status createdAt creator{email}}}}}' --raw-var s=<serviceId> --raw-var e=<envId>`. `creator: null` on GitHub records that never built points to the gate.
@@ -55,7 +55,7 @@ What `--help` won't tell you, for CLI 5.x. Check `railway --version` first: 4.x 
 ## SSH, databases, Git Bash
 
 - `railway ssh` needs a registered key; on Windows pass a native path (Git Bash paths failed): `railway ssh keys add --key "C:\Users\<you>\.ssh\id_ed25519.pub" --name <name>`, then `railway ssh keys`, `railway ssh config -s <svc> --dry-run`.
-- 5.62.1 docs say piped stdin works without a PTY. 4.5.1 notes of lost quoting and `< file` hangs under Git Bash are untested now: re-test first.
+- Long inline remote commands can fail with a misleading "Unauthorized"; pipe the script over stdin instead (`railway ssh -p -e -s -- node - < script.js`, works on 5.62.1 under Git Bash).
 - `*.railway.internal` hosts resolve only inside Railway. Locally use the public URL (`DATABASE_PUBLIC_URL`, TCP proxy) or run through `railway ssh`.
 - Native Windows Python can't open `/tmp/...`: pipe through stdin or pass `"$(cygpath -w /tmp/x)"`. Take `rc=${PIPESTATUS[0]}` right after the pipeline; an `echo` in between resets it.
 

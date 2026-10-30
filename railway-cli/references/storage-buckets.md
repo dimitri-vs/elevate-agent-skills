@@ -15,6 +15,8 @@ railway bucket info --bucket <name> --json
 railway bucket credentials --bucket <name> --json     # prints secrets: don't echo into a transcript
 ```
 
+`bucket` subcommands take `-e`/`-b` but no `-p`: run them from a linked directory, or use `railway api` for another project.
+
 Dashboard: the canvas Create button > Bucket.
 
 ## Wiring credentials into a service
