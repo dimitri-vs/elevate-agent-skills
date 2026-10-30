@@ -82,7 +82,7 @@ When you merge the two outputs, say which findings both models reported (high co
 **Push back on `ultra` for small tasks.** It doubles the quota and the noise. Suggest `medium` or `high`, and run `ultra` only if the user confirms. Also, Astra tends to over-test small tasks ("broader tests than the task requires", per OpenAI's model guide). When you do run it, bound the scope in the prompt, for example "don't run or write tests beyond what's needed to verify a finding".
 
 **Model notes (2026-10-15):**
-- GPT-6.1 Sol (`gpt-6.1-sol`) has been Codex's own default since CLI 0.161, but there's no review benchmark for it yet. Try it with `CODEX_REVIEW_MODEL=gpt-6.1-sol` for a one-off. The env var applies to single tiers only; `ultra` ignores it.
+- GPT-6.1 Sol (`gpt-6.1-sol`) has been Codex's own default since CLI 0.161. In one head-to-head on a real commit review (2026-10-30) it roughly tied 5.6 sol: 5 shared findings, each model caught bugs the other missed, and 6.1 was a little faster (4m 44s vs 5m 26s). That's one sample, so `high` stays on 5.6 sol. Try 6.1 with `CODEX_REVIEW_MODEL=gpt-6.1-sol` for a one-off. The env var applies to single tiers only; `ultra` ignores it.
 - `gpt-5.6-luna` is the cheap smoke-test model.
 - Under ChatGPT-account auth the floating `gpt-5-codex` alias doesn't work. Use versioned names.
 - Some Astra code reviews get cut off by OpenAI's cyber-safety filter. Open issue openai/codex#47310; 5.6 sol isn't affected. If an `astra` leg stops with a safety message, rely on the `high` leg.
