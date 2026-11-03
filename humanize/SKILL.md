@@ -80,6 +80,17 @@ EOF
 
 Recommended invocation for anything public or client-facing: paragraph `--context` + `-r` register + `--voice`. For a quick internal Slack reply, `--context` alone is enough.
 
+## Counsel first (liability-sensitive messages)
+
+Some drafts need a second agent before the author pass, not after: the `counsel` skill (`~/.claude/skills/counsel/`). It reviews the draft in isolation from this session for over-disclosure, over-precision, over-commitment, confessed fault and foreclosed options, and returns findings you apply before humanizing. Run it, unprompted, when the draft is any of:
+
+- a client message in a security incident or breach notice, or any answer to "was our data accessed"; anything asserting a cause, a fix, or that something is secure;
+- a billing, rate, contract, scope or warranty dispute; a change to the client's live data; a contract mismatch we are disclosing;
+- any insurance, warranty or consumer claim message after the opening email, and any support claim asking for money, a replacement or an exception;
+- anything the recipient could forward to a lawyer, insurer, regulator or platform dispute desk.
+
+Not for routine support replies ("fixed, deployed"), status updates, scheduling or internal messages; the author pass below handles those. When counsel ran, say so in `--context` ("draft has had a counsel pass; keep its cuts, don't re-add specifics") so the author pass does not put the numbers back. Counsel's apply policy (how hard to lean on its findings, which ones go to Dimitri as a yes/no) is in its own SKILL.md.
+
 ## Author pass (do this BEFORE calling the CLI)
 
 The CLI is an editor: it fixes style but cannot know what you know. What Dimitri's blind judging (2026-09-10) and his edit corpus reward is author-level substance (the right length, one real opinion, honest uncertainty, a concrete fact from the thread), and only the drafting agent can supply that, because only it has the conversation context. Before piping a draft through `humanize`, revise the draft:
