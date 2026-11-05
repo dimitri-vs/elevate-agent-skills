@@ -270,6 +270,57 @@ def use_profile(name: str | None):
 
 
 # ---------------------------------------------------------------------------
+# Optional tab-state hook
+# ---------------------------------------------------------------------------
+# A run takes 2-40 minutes, during which the calling agent session sits idle
+# and its terminal tab looks finished. Machines that have a tab-state tool can
+# name it in ~/.config/agent-tab-state.json:
+#
+#     {"command": ["python", "C:/path/to/tool.py"]}
+#
+# and the run is then bracketed with
+#
+#     <command> state watching --for <N>m --note ... --owner <tag> --if-free --session <id>
+#     <command> state clear --owner <tag> --session <id>
+#
+# so the tab shows "waiting on something, keep me open" until Codex is back.
+# No config file (the default) or no CLAUDE_CODE_SESSION_ID: nothing happens.
+# Best-effort throughout; a hook failure never touches the run.
+
+TAB_STATE_CONFIG = Path.home() / ".config" / "agent-tab-state.json"
+
+
+def _tab_state(*args: str) -> None:
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session or not TAB_STATE_CONFIG.is_file():
+        return
+    try:
+        command = json.loads(TAB_STATE_CONFIG.read_text(encoding="utf-8")).get("command")
+        if not (isinstance(command, list) and command and all(isinstance(c, str) for c in command)):
+            return
+        subprocess.run([*command, "state", *args, "--session", session],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5)
+    except Exception:
+        pass
+
+
+@contextmanager
+def tab_watching(seconds: int, note: str):
+    """Mark the calling session's tab as waiting for the duration (see above).
+    The expiry is the run's own timeout plus slack, so a killed run that never
+    reaches the clear still ends on time. --if-free leaves a state the session
+    set for another reason alone, and the clear only drops what this run set."""
+    owner = f"codex-review-{os.getpid()}"
+    _tab_state("watching", "--for", f"{seconds // 60 + 2}m", "--note", note,
+               "--owner", owner, "--if-free")
+    try:
+        yield
+    finally:
+        _tab_state("clear", "--owner", owner)
+
+
+# ---------------------------------------------------------------------------
 # Sessions (follow-up turns)
 # ---------------------------------------------------------------------------
 
@@ -672,7 +723,7 @@ def main():
                          sandbox=args.sandbox, timeout=timeout, worktree=args.worktree,
                          label=f"_{leg}" if len(plans) > 1 else "")
 
-    with use_profile(args.account):
+    with tab_watching(max(p[3] for p in plans), "codex review"), use_profile(args.account):
         if len(plans) > 1:
             with ThreadPoolExecutor(max_workers=len(plans)) as pool:
                 results = list(pool.map(run, plans))
@@ -742,7 +793,7 @@ def resume_main(args, prompt: str) -> None:
     print(f"  Model:     {model} (reasoning={reasoning}, timeout {timeout // 60}m)", file=sys.stderr)
 
     account = args.account or (fm.get("account") if fm.get("account") not in (None, "default") else None)
-    with use_profile(account):
+    with tab_watching(timeout, "codex review follow-up"), use_profile(account):
         res = run_codex(prompt, model=model, reasoning=reasoning, workdir=cwd,
                         sandbox=sandbox, timeout=timeout, resume_id=session)
 
