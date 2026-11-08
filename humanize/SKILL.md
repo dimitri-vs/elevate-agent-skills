@@ -143,8 +143,10 @@ The CLI is an editor: it fixes style but cannot know what you know. What Dimitri
 
 Read the output file once before reporting the path. Two things the LLM pass under-delivers:
 
-- **Block uniformity:** if every paragraph came out at the same 2-3 sentence shape, make one manual edit — merge two paragraphs, or break one after its first sentence. Plain file edit, no API call.
-- **Over-repaired looseness:** if the draft had a loose construction the rewrite tidied away (a dangling clause, an abrupt topic graft, a mid-sentence "..."), consider restoring it. Looseness is texture, not error.
+- **Block uniformity:** every paragraph came out at the same 2-3 sentence shape.
+- **Over-repaired looseness:** the draft had a loose construction the rewrite tidied away (a dangling clause, an abrupt topic graft, a mid-sentence "..."). Looseness is texture, not error.
+
+Never fix either by editing the opened file yourself: any difference from `-tool.md` is recorded as Dimitri's edit, so an agent fix teaches the distillation that he writes like Claude (dropped 2026-11-08 after 11 such whitespace-only "edits" turned up in the corpus). If one is bad enough to matter, run `humanize --edit <path> -s "merge paragraphs 2 and 3" -c "<same context>" --open` before you report the path, and report the new file. Otherwise leave it.
 
 One thing that looks like damage and is not: a greeting fused onto the first line ("Hi James, mockups are attached...") is the intended shape (author pass step 8). Leave it.
 
