@@ -8,7 +8,7 @@ Gemini UI Review — send a screenshot + design context to Gemini for aesthetic 
 Usage:
   uv run gemini-review.py screenshot.png "Brief app description"
   uv run gemini-review.py screenshot.png --design-doc path/to/interface-design.md
-  uv run gemini-review.py screenshot.png --design-doc path/to/interface-design.md --model gemini-3-pro
+  uv run gemini-review.py screenshot.png --design-doc path/to/interface-design.md --model gemini-4-hydrogen
 
 Environment:
   GOOGLE_GENAI_API_KEY — required. Falls back to ~/.env, then .env in CWD.
@@ -79,8 +79,8 @@ def main():
     parser.add_argument("context", nargs="?", default="A mobile app screen",
                         help="Brief app/screen description")
     parser.add_argument("--design-doc", "-d", help="Path to interface-design.md")
-    parser.add_argument("--model", "-m", default=os.environ.get("GEMINI_REVIEW_MODEL", "gemini-3.1-pro-preview"),
-                        help="Gemini model (default: gemini-3.1-pro-preview)")
+    parser.add_argument("--model", "-m", default=os.environ.get("GEMINI_REVIEW_MODEL", "gemini-4-carbon"),
+                        help="Gemini model (default: gemini-4-carbon; cheaper: gemini-4-hydrogen)")
     parser.add_argument("--no-save", action="store_true", help="Don't save to ~/reviews/")
     args = parser.parse_args()
 

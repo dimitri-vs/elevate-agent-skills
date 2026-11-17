@@ -362,7 +362,7 @@ Arguments:
 - First positional: screenshot path (PNG/JPG)
 - Second positional: brief app/screen context string
 - `--design-doc` / `-d`: path to `interface-design.md` (attached as context)
-- `--model` / `-m`: override model (default: `gemini-3.1-pro-preview`, env: `GEMINI_REVIEW_MODEL`)
+- `--model` / `-m`: override model (default: `gemini-4-carbon`, Google's strongest model as of 2026-11-17; `gemini-4-hydrogen` is the cheaper option; env: `GEMINI_REVIEW_MODEL`). Avoid `gemini-2.5-*`: deprecated and silently routed to Flash models. If a default 404s, list what the key can call with `client.models.list()` before guessing
 - `--no-save`: skip saving to `~/reviews/`
 
 **API key setup:** `GOOGLE_GENAI_API_KEY` is required. The script checks (in order): env var → `<skill-directory>/.env` → `~/.env` → `./.env`. The key lives in the skill directory's `.env` file alongside this script (matching the pattern used by other elevate-agent-skills like `slack-canvas/` and `web-research/`).
