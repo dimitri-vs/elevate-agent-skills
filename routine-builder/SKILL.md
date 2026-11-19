@@ -105,7 +105,23 @@ description: What this routine monitors/does, how often, and what it delivers.
 
 ## Schedule Configuration
 
-Routines are scheduled via the Desktop app's Routines page.
+Routines are scheduled via the Desktop app's Scheduled page (Code side; older docs say "Routines page").
+
+**Creating a LOCAL routine in the UI (Desktop UI as of 2026-11-19, the trap that cost a session 3 tries):** the new
+"Scheduled tasks" page defaults to a CLOUD routine (runs on Anthropic's servers, "Cloud environment: Default", no local
+files, nothing written to disk). A local routine needs all of:
+1. The **Code** side of Desktop (the `</>` toggle top-left), not the chat side. Chat/Cowork "scheduled tasks" are a third kind
+   (sandboxed VM, stored under `%APPDATA%\Claude\local-agent-mode-sessions\...`), also wrong.
+2. **Scheduled > New task > "Set up manually"** (not "Create with Claude").
+3. **Advanced settings > General > "Only on this computer" ON.** This is the switch that makes it local; only then does the
+   folder field appear.
+4. **A local folder** (the routine's cwd), plus name and prompt (a placeholder prompt is fine, see the deployment order below).
+The UI only offers Daily/Weekly with a time, and its time picker pre-fills the current time: the saved cron comes out like
+`16 13 * * *`. Fix the cron, and add `model` and `permissionMode`, by hand in `scheduled-tasks.json` with the app QUIT (below).
+**Check it landed before going on:** `~/.claude/scheduled-tasks/<id>/` exists and the entry is in
+`%APPDATA%\Claude\claude-code-sessions\<account>\<org>\scheduled-tasks.json`. If neither exists, it was made as a cloud or
+Cowork task: delete it and redo with the steps above. "Quit" means the tray too: after a UI edit Desktop is often still
+running (`Get-Process claude | ? Path -like '*WindowsApps*'`), and its exit rewrites the JSON over hand edits.
 
 **Deployment order matters (verified 2026-07-25):** creating a routine in the Routines UI **overwrites** any pre-staged `~/.claude/scheduled-tasks/<id>/SKILL.md` with whatever placeholder prompt was typed in the dialog. Correct order: (1) user creates the routine in the UI (placeholder prompt is fine), (2) THEN copy the real SKILL.md from the repo mirror over the placeholder. The routine `id` in scheduled-tasks.json = the folder name.
 
@@ -281,6 +297,6 @@ When migrating a scheduled task from another platform:
 4. **Design the two layers** - split mechanical collection from editorial judgment
 5. **Set up the project** - create `Code/<name>/`, write config.py, main script, template
 6. **Write the SKILL.md** - follow the structure above
-7. **Deploy** - user creates the routine in the Desktop Routines UI first (placeholder prompt), THEN copy the real SKILL.md over `~/.claude/scheduled-tasks/<name>/SKILL.md`, then verify cron/cwd in scheduled-tasks.json (read-only is safe)
+7. **Deploy** - user creates the routine in the Desktop Scheduled page first as a LOCAL task (Set up manually + "Only on this computer" + folder; see Schedule Configuration), placeholder prompt, THEN copy the real SKILL.md over `~/.claude/scheduled-tasks/<name>/SKILL.md`, then verify cron/cwd in scheduled-tasks.json (read-only is safe)
 8. **Test** - trigger a manual run, review the output, fix issues
 9. **Iterate** - tune queries, tighten triage rules, adjust schedule based on first few runs
