@@ -213,6 +213,7 @@ uv run ms_teams.py send "<chat link>" -f draft.md --dry-run             # previe
 | lists, headings, tables | normal Markdown |
 | code | `` `inline` `` / fenced blocks (language highlighting in channels only) |
 | line break | a single newline is kept as a line break |
+| paragraph gap | a blank line between paragraphs shows as a blank line (sent as `<p>&nbsp;</p>`, like the Teams client) |
 | **@mention** | `@[Display Name](person@contoso.com)` - a real mention that notifies them |
 
 `--format html` sends raw Teams HTML; `--format text` sends literal text. Bodies

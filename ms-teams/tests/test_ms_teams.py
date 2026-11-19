@@ -233,6 +233,17 @@ class TestRendering:
         html_ch, _ = mt.compose_html(src, "markdown", "channel")
         assert '<codeblock class="python">' in html_ch
 
+    def test_compose_markdown_paragraph_gap(self):
+        gap = "<p>&nbsp;</p>"
+        html, _ = mt.compose_html("one\n\ntwo\n\nthree", "markdown", "chat")
+        assert html == f"<p>one</p>\n{gap}\n<p>two</p>\n{gap}\n<p>three</p>"
+        # only between paragraphs: none next to a list, heading or code block, none trailing
+        html, _ = mt.compose_html("# h\n\nintro\n\n- a\n- b\n\nout\n\n```\nx\n\ny\n```\n\nend",
+                                  "markdown", "chat")
+        assert gap not in html
+        assert mt.compose_html("a\nb", "markdown", "chat")[0] == "<p>a<br />\nb</p>"
+        assert mt.compose_html("<p>a</p>\n<p>b</p>", "html", "chat")[0] == "<p>a</p>\n<p>b</p>"
+
     def test_compose_text_escapes(self):
         assert mt.compose_html("a < b\nnext", "text", "chat")[0] == "a &lt; b<br>next"
 

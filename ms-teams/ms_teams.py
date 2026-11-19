@@ -1326,6 +1326,11 @@ def compose_html(text: str, fmt: str, conv_kind: str) -> tuple[str, list[tuple[s
     else:
         import markdown
         body = markdown.markdown(text, extensions=["fenced_code", "tables", "sane_lists", "nl2br"])
+        # Teams gives <p> no margin, so back-to-back paragraphs read as one wall
+        # of text. The Teams client itself writes an empty line as <p>&nbsp;</p>;
+        # do the same between consecutive paragraphs (lists, headings, tables
+        # and code blocks carry their own spacing, so only <p> next to <p>).
+        body = re.sub(r"</p>\s*<p>", "</p>\n<p>&nbsp;</p>\n<p>", body)
 
         def codeblock(m):
             lang = (m.group(1) or "plaintext") if conv_kind == "channel" else "plaintext"
