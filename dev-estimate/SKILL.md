@@ -35,7 +35,7 @@ Multiply the agent's `likely` by the factor for its size:
 | 4h and up | ×0.12, but never below 1h | ×0.2, but never below 1.6h |
 
 - Work where the approach itself is unknown (research, ops, debugging an unknown cause): ×0.5 for both ends instead. The evidence for this factor is thin.
-- Phase or project quotes that include calls and client communication: add 30% (a client who needs little back-and-forth) to 50% (one who needs a lot) to both ends.
+- Then add the client's overhead to both ends, for the calls, messages and coordination around the work: low 30% (needs little back-and-forth), medium 40%, high 50% (needs a lot). A new client starts at medium. Leave it off incident work.
 - Quote a range: low = the planning figure rounded down to the half hour, high = the quoting figure rounded up to the half hour ("1-2 hours, assuming no revisions").
 
 Only the converted range goes to the client. The raw number and the steps stay with you.
@@ -58,5 +58,6 @@ Your factors depend on how you work and on the model. After 20-30 logged estimat
 - compute actual ÷ raw `likely` per item
 - take the median per size tier (under 4h, 4h and up) as your planning factor, and roughly the 80th percentile as your quoting factor
 - refit whenever you switch models
+- per client, compare the time spent around the work (calls, messages, coordination) with the time on the items themselves, and move the client to the overhead level that rate sits nearest once you have about four weeks of data
 
 Any single item can land about 2.5× either way; the factors hold on average across many items. Most big misses come from scope the estimator never saw, so the scope step matters more than the multiplier.
