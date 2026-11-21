@@ -6,6 +6,7 @@ For editors of this skill, not for the agent following it. Source method: the ag
 - **The verbatim instruction sentence.** It is the prompt the factors were fitted on. Changing it changes what the factors mean.
 - **"Cost drivers", not "reasoning".** Anthropic's reasoning-extraction safeguard stopped estimator runs, likely triggered by the word.
 - **Don't ask the model its name.** Models misreport it.
+- **Fixed estimator model (`claude-opus-5-5`, effort unset), one per item.** The tracker's method allows only that condition: "factors belong to one model", no other models added, no move to a newer Opus without a recalibration. Codex rows ran ~0.08-0.10x and were dropped as an estimator.
 - **Scope first at 5h+ / multi-part, estimate parts and sum.** A whole-build row under-predicted a large build badly (7-12h estimated, passed 16h unfinished). Nearly every miss traced to scope the estimate never saw.
 - **Factor table.** Fitted 2026-11-13 on 33 tickets from one developer across four clients, `claude-opus-5-5`, plain prompt, effort unset. Actual = raw attention minutes (billed runs 1.0-1.16× raw). Conservative column held on 26 of 33 overall, but only 7 of 11 under 4h, so short quotes are the weakest. Log-space r=0.54; single items ~2.5× either way, sums ~1.00×. ×0.5 for unknowns/ops rests on 5 tickets.
 - **Range = planning to quoting.** Matches how quotes are given ("about 1-2 hours, assuming no revisions").

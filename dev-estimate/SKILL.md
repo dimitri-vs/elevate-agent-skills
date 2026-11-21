@@ -11,7 +11,7 @@ Small items under the client's own "just do it" threshold need no estimate unles
 
 ## 1. Get the raw estimate from a fresh agent
 
-Spawn a new background sub-agent with the Agent tool: a fresh agent, never a fork or anything else that inherits this conversation. The session can carry on with other things meanwhile, but not with the work being estimated.
+Spawn a new background sub-agent with the Agent tool: a fresh agent, never a fork or anything else that inherits this conversation. Run it on `claude-opus-5-5` with reasoning effort left unset, the setup the factors in section 2 were measured under; on any other model or effort the factors don't apply until you refit them (section 5). One estimator per item (per part, when you scope first). The session can carry on with other things meanwhile, but not with the work being estimated.
 
 Give it only:
 - the ask, in the requester's own words (paste the message, ticket or to-do)
