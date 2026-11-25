@@ -15,7 +15,7 @@ Reads stdin, writes to stdout. `ANTHROPIC_API_KEY` is sourced from (in order):
 
 If `humanize` errors with `"ANTHROPIC_API_KEY is not set"`, run `grep ANTHROPIC ~/.env` — if nothing matches, the key is missing from that file and needs to be added there (or exported in the shell). Do not re-add it to a project `.env` as a workaround; put it in `~/.env` once.
 
-> **Bash timeout:** Default model is now Sonnet 4.6 (fast, ~15-30s for most inputs). For long inputs (1000+ words), set `timeout: 300000` or use `run_in_background: true`. Pass `-m claude-opus-4-7` for maximum quality on high-stakes content (slower, 1-3 min).
+> **Bash timeout:** The rewrite runs on Gemini 4 Argon by default since 2026-11-25 (`GEMINI_API_KEY` in `~/.env`), and falls back to Sonnet 4.6 by itself if the key is missing or the call fails. `--tidy` and `--edit` stay on Sonnet 4.6. Most inputs take ~15-30s. For long inputs (1000+ words), set `timeout: 300000` or use `run_in_background: true`. Pass `-m claude-opus-4-7` for maximum quality on high-stakes content (slower, 1-3 min).
 > - **If Claude Code's Bash display truncates the output** (appears empty after a long run), re-run redirecting to `/tmp/humanize/out.md` and `cat` the file (see [Temp-file pattern](#temp-file-pattern) below).
 
 ## Routing: which mode (decide this first)
@@ -64,7 +64,7 @@ Notepad++ auto-saves humanize drafts (a PythonScript startup hook at `%APPDATA%\
 
 ## Always pass `--context`
 
-The humanizer cannot see what kind of message it's rewriting — it only gets the text. So **always pass `-c`/`--context`, and make it a short paragraph, not a label.** Cover four things: what the message is, who reads it, what they already know, and what the message has to accomplish. The prompt uses this to decide what to cut, which is where most of the excess length in a draft lives; a bare "Slack reply" only sets the register and greeting (by default the humanizer drops the greeting, and only keeps one when the context says it's an initial/cold outreach).
+The humanizer cannot see what kind of message it's rewriting — it only gets the text. So **always pass `-c`/`--context`, and make it a short paragraph, not a label.** Cover four things: what the message is, who reads it, what they already know, and what the message has to accomplish. The prompt uses this to decide what to cut, which is where most of the excess length in a draft lives; a bare "Slack reply" only sets the register and greeting (by default the humanizer drops the greeting, and only keeps one when the context says it's an initial/cold outreach). Say what the reader needs, not what the draft contains. A context that lists what the message contains ("reports what the test found, lists the known over-hiding, asks him to test") makes every listed item required, so the rewrite cannot cut any of them, and the paragraph's own phrases come back in the output (2026-11-16: "promised a short written summary" in the context became "here is the written summary" in the email).
 
 This is distinct from `-s`/`--steering` (explicit rules, passed rarely). Context is a situational description, passed every time. Examples:
 
@@ -123,7 +123,7 @@ The CLI is an editor: it fixes style but cannot know what you know. What Dimitri
    | Public post (LinkedIn, Reddit, HN, Google Business Profile) | 150 | 300 |
    | SMS | 50 | 80 |
 
-   Draft to the **aim**, not the cap. Over the aim, delete a whole point; do not compress every sentence, because uniform density is itself an LLM signature. Cut in this order, which is the order he deletes in (measured over 252 of his edits): the explanation of why you did it that way, reassurance he did not ask for, the second ask riding along with the first, the promise of what you will do next, then any sentence the thread already carries. Numbers and links survive - he cuts prose and keeps data. Leave room for one sentence of actual opinion ("my worry is...", a direct question); that is what he most often adds back. A cap breach is a decision you state in one line when you report the file, not a default. Pass the budget to the CLI too: `-s "Target: N words or fewer."` (named numbers move the model where the standing "shorter" rule does not).
+   Draft to the **aim**, not the cap. Over the aim, delete a whole point; do not compress every sentence, because uniform density is itself an LLM signature. Cut in this order, which is the order he deletes in (measured over 252 of his edits): the explanation of why you did it that way, reassurance he did not ask for, the second ask riding along with the first, the promise of what you will do next, then any sentence the thread already carries. Numbers and links survive - he cuts prose and keeps data. Leave room for one sentence of actual opinion ("my worry is...", a direct question); that is what he most often adds back. A cap breach is a decision you state in one line when you report the file, not a default. Pass the budget to the CLI too: `-s "Target: N words or fewer."` (named numbers move the model where the standing "shorter" rule does not). By default the steering is only the number. Do not add "Keep the X list" or "Keep the Y warning" for content you chose to include: on 2026-11-17 a draft went in with "Keep the over-hiding list and the synthetic-files-only warning", and those were the two blocks he deleted before sending (169 words to 82). Add a keep clause only for a line Dimitri dictated.
 
 3. **"Make it shorter" means half, not a fifth.** Across the 24 messages he sent back for another pass, what he ended up sending was 0.63x the first draft (IQR 0.47-0.78). Use `humanize --edit <path> -s "about half as long" --open` (see Iterating on an opened result); never hand-edit the opened file.
 
@@ -141,55 +141,9 @@ The CLI is an editor: it fixes style but cannot know what you know. What Dimitri
    - **No "land".** Never "land / lands / landed / landing" for arrive, ship, merge, go live, happen or get delivered ("should land before Oct 27", "first removals land mid-December", "once the invite lands", "where things landed"). It is the word he dislikes most, it is 0.02 per 1k words in his own writing, and 54 of the 60 uses in CLI output came straight from the agent's draft. Write the literal verb: arrives, is delivered, ships, is merged, goes live, happens, shows up.
    - **Colons: write them the way you naturally would, no more.** Drafts carry 13 mid-sentence colons per 1k words against 5 in his pre-AI mail, but his edits do not fight them: he kept 76% of the CLI's colons, wrote out a flat ~20% of the prose ones no matter how many the text had or what shape the head took, kept 98% of list and data colons, and added as many colons himself as he removed (751 chains, `benchmarks/alignment/colon_evidence.py`). So: colons before a number, a link, a list or a label are never a problem; do not reach for the "Label: payoff" shape ("Fix: open the grant", "Found the issue: ...") as a punch device, since that is the kind he rewrites as a sentence; and never add a colon to the CLI's output by hand to tighten it.
 
-## Reader experiment (reader-2026-11, running from 2026-11-08)
+## Reader experiment (ended 2026-11-25)
 
-The agent that drafted a message cannot read it cold: it knows everything the session knows, so it keeps the detail the recipient would not miss. This experiment tests whether a fresh-context reader that sees only what the recipient sees fixes that, with a coin flip per message so the result is readable. Design and stop rule: `elevate-humanizer/benchmarks/alignment/interventions/2026-11-08-fresh-reader.md`.
-
-**Which messages:** every outbound message to a person or a thread (email, Slack, Basecamp, SMS, Upwork, Discord) on the default pass. Not: counsel-routed drafts (counsel is their reader), `--tidy`, public posts, `--edit` rounds, re-humanizes. The CLI drops drafts under 51 words by itself. Every eligible message goes in. Choosing which ones go in, re-running to change the arm, or dropping `--reader-id` ruins the comparison. If Dimitri says to skip it for a message, skip it and say so.
-
-**Both arms, after the author pass:** write the packet and run it. `humanize --reader-template` prints the shape.
-
-```bash
-humanize --reader - <<'EOF'
-## Recipient
-...
-## Original ask
-...
-## What they can see
-...
-## Facts to convey
-...
-## Constraints from Dimitri
-...
-## Draft
-...
-EOF
-```
-
-- **Recipient:** who they are, the channel, the relationship.
-- **Original ask:** their message or the question that opened the thread, verbatim.
-- **What they can see:** the recipient-visible thread and attachments that matter here. Nothing from the session.
-- **Facts to convey:** one per line, marked (verified) or (uncertain).
-- **Constraints from Dimitri:** only what he said, verbatim, or "none". Not your own idea of what the message must do. That framing is exactly what the reader is there to check.
-- **Draft:** the draft you would otherwise humanize.
-
-Give the call `timeout: 120000`. The first line is `ARM reader id=...`, `ARM control id=...` or `ARM none` (too short: humanize as usual, no `--reader-id`).
-
-**Control:** humanize the draft unchanged, adding `--reader-id <id>`.
-
-**Reader:** apply the findings once, then humanize with `--reader-id <id>`. Do not run the reader again on the revised draft.
-
-- `CUT`: delete the span, unless it is in Constraints from Dimitri or a verified fact the recipient needs to act on. Then keep it and say why in one line of your report.
-- `MISSING`: add it only if the session verifies it.
-- `REFRAME`: rewrite that span in the recipient's terms.
-- `UNKNOWN`: check it against the session, then keep it, mark it as a guess, or drop it.
-- Ignore anything about style. If you cut something your `--context` still asks for, take it out of the `--context` too.
-
-If `--reader` errors, re-run the same command once: same draft, same arm, it retries the call. If it fails again, humanize without findings and still pass `--reader-id`.
-
-**Report line:** add the arm and what you applied, e.g. "reader: 2 cuts applied, kept the deadline (constraint)" or "reader: control".
-
-**Frozen while it runs:** no changes to the author pass, the base prompt, `tells.py` or `style.md`. Operational fixes (tabs, send stamping, provenance) are fine.
+reader-2026-11 was stopped early: the reader arm was sent untouched 1 time in 33 against 6 in 41 for control. Go from the author pass straight to the CLI. Do not run `humanize --reader` or pass `--reader-id`.
 
 ## Structural check (AFTER the CLI returns)
 
@@ -309,7 +263,7 @@ The three flags are mutually exclusive.
 | `-t, --heuristic-texture` | — | Force heavy heuristic intensity |
 | `-l, --heuristic-light` | — | Force light heuristic (same as default; for explicitness) |
 | `--no-heuristic` | — | Disable heuristic pass (unconditional cleanup still runs) |
-| `-m, --model ID` | `claude-sonnet-4-6` | Anthropic model ID. Use `-m claude-opus-4-7` for maximum quality on high-stakes content. |
+| `-m, --model ID` | `gemini-4-argon` (`claude-sonnet-4-6` for `--tidy` and `--edit`) | Leave it unset: until the late-December readout one default run in three goes to Sonnet 4.6 at random, and passing `-m` takes the message out of that comparison. |
 | `--temperature FLOAT` | 0.8 | LLM sampling temperature |
 | `--max-tokens INT` | 8192 | Output-length ceiling in tokens. Raise for long-form inputs that hit truncation |
 | `--style-file PATH` | `~/.config/humanize/style.md` | Path to a personal style file. Loaded automatically if present. |
