@@ -8,7 +8,9 @@ For editors of this skill, not for the agent following it. Source: the agency's 
 - **"Cost drivers", not "reasoning"; never ask a model its name.** The provider's reasoning-extraction safeguard stopped estimator runs, likely triggered by the word. Models misreport their own name.
 - **Scope at 5h+; split and sum above 15-20h raw; one question round of at most 4.** A whole-build row (58h raw, 7-12h converted) under-predicted a build that passed 16h unfinished; its part rows summed to 113.5h raw, 14-23h converted. Nearly every miss came from work the estimate never saw, hence the question round. One round only, so big estimates don't become interviews.
 - **Factor table.** Fitted 2026-11-13 on 33 tickets from one developer across four clients. Actual = hands-on attention minutes. Conservative column held on 26 of 33 overall, but only 7 of 11 under 4h. Log-space r=0.54; single items about 2.5× either way, sums about 1.00×. A fitted sliding scale predicted no better than two tiers; revisit at about 60 items.
-- **×0.5 for unknown work, developer sets the high end.** 5 tickets, median .49, held on 3 of 5: too few for a conservative factor.
+- **×0.5 for ops, infra, audits and research, developer sets the high end.** 5 tickets, median .49, held on 3 of 5: too few for a conservative factor. All five were ops and research, where time goes to waiting, calls and manual steps.
+- **×0.5 is chosen by the kind of work, not by "unknown" labels in the scope notes** (2026-11-27). The rule used to cover any part marked unknown. On a seven-part spreadsheet build, four parts got that label from a loose test (a technique new to the codebase, a documented API, synthetic test cases read as an "accuracy target"); ×0.5 on them gave about 32h against the developer's 6-12h, while the normal tiers on all seven parts gave about 11h. A sibling build in the same repo had run at about 0.18× of its summed part rows, new technique included. Scope notes now say what is uncertain, and the agent converting the raw numbers picks the factor.
+- **Compare with the nearest finished build.** That comparison alone would have caught the case above. It raises a flag and leaves the number to the developer; an agent allowed to close the gap would re-pick factors to match, which is anchoring by another route. It flags only a higher total: a smaller job naturally comes out lower, so a two-way flag would be mostly noise (cold review suggestion, rejected 2026-11-27).
 - **Overhead on phase/project quotes only, 30/40/50% by client, new clients medium, show both ranges.** The owner's guidance: "leave it out on a single small ticket, which doesn't cause the calls... The level is a starting point, not a formula." A one-day version of this skill applied overhead to every quote; that contradicted the source and was reverted.
 - **`actual` is hands-on only.** Calls, comms and estimating feed the overhead rate; counting them in `actual` would push the factors up and add overhead twice.
 - **Range, whole hours, hedged, never a single figure; the developer sets the quote.** Owner's rule since 2026-10-30.
@@ -19,6 +21,7 @@ For editors of this skill, not for the agent following it. Source: the agency's 
 Rejected on purpose:
 - 1h/1.6h floors on the 4h+ tier, suggested by a cold review to remove the step at 4h. Not in the source; the developer sets the final number from the figures shown.
 - a two-ended ×0.5/×0.8 range for unknown work. No data behind a second number.
+- a separate factor for summed part rows (two builds so far; the normal tiers on summed parts came near the developer's number). Revisit with a third build.
 
 Do not add back:
 - client names, client-specific thresholds, ticket prefixes or per-client billed ratios (repo is public)

@@ -33,7 +33,7 @@ Ask for "cost drivers", in those words, not "reasoning". If the estimator is sto
 
 ## 2. Scope first for bigger work
 
-**When the work is plainly 5h or more, or has several separate parts,** write down the parts before estimating and, for each: known or unknown and why, what done means and who decides, what is blocked on someone else, and what could slip to a later phase. Scope facts only, no hours. Skip this for small items.
+**When the work is plainly 5h or more, or has several separate parts,** write down the parts before estimating and, for each: what is uncertain about it and why, what done means and who decides, what is blocked on someone else, and what could slip to a later phase. Scope facts only, no hours. Skip this for small items.
 
 **When a raw `likely` comes back above about 15-20h, or the work has several parts,** never convert one whole-build number. Split the work into parts, run one estimator per part, convert each part (section 3) and sum. Before those estimators run, ask the developer one round of at most 4 questions for the whole job (or the whole batch), spent on what would move the total most. Useful topics: is any part a proof of concept or a technique they haven't used; does done mean hitting an accuracy or quality bar; what depends on real client data or someone else's system or person; what will the client likely ask for once they see it; what is out. Decide everything else yourself and list it as assumptions the developer can correct. Write the answers into the scope facts the estimators read.
 
@@ -46,7 +46,7 @@ Multiply the estimator's `likely` by the factor for its size:
 | Under 4h | ×0.25 | ×0.4 |
 | 4h and up | ×0.12 | ×0.2 |
 
-Unknown parts, and ops, infra, audits and research with unknowns (key rotations, incidents, security reviews, proofs of concept, accuracy targets, work that depends on real client data): plan at ×0.5, any size. There isn't enough data for a quoting factor, so show the developer the ×0.5 figure and let them set the high end; the quote names the unknown as a condition ("revisited after the first accuracy report"). Known parts of the same job keep the normal tiers.
+Ops, infra, audits and research (key rotations, incidents, security reviews, proofs of concept whose done is an answer (does it work, how well) rather than a shipped feature, parts whose done means hitting an accuracy bar on data you don't control such as real client data): plan at ×0.5, any size. There isn't enough data for a quoting factor, so show the developer the ×0.5 figure for those parts and let them set the high end; the quote names the open question as a condition ("revisited after the first accuracy report"). Building code keeps the normal tiers, including infra written as code, a technique new to the codebase, a documented third-party API, or test cases you write yourself. You pick the factor for each part from what its work is; the scope notes describe what is uncertain but don't choose the factor.
 
 These predict hands-on time. Two things go on top, and they stack:
 - **Overhead**, on a phase or project quote only: the triage, estimating, calls and client communication around the work. Leave it off a single small item, which doesn't cause the calls. Levels by how much back-and-forth the client needs: low about 30% of hands-on, medium about 40%, high about 50%. A new client starts at medium. Agency-side commercial work (proposals, quotes) and incidents are not overhead. The level is a starting point, not a formula: show the developer the hands-on range, the range with the level on top, and what you expect to drive overhead on this job, and they set the number.
@@ -56,7 +56,7 @@ Example: 10h of hands-on build for a high-overhead client = 15h worked.
 
 ## 4. Show, quote, log
 
-Show the developer the raw number, the planning figure and the quoting figure before anything is quoted. The developer sets the quote.
+Show the developer the raw number, the planning figure and the quoting figure before anything is quoted. If a finished build in the same codebase has a logged actual, put the new planning total beside it, and say so when the new total is higher without a reason you can name. The comparison is for the developer; it never changes a raw number or a factor. The developer sets the quote.
 
 A client quote is a range: the planning figure is the low end, the quoting figure the high end, rounded to whole hours (1.0 and 1.7 become "1-2 hours"), and hedged ("assuming no revisions"). Never quote a single figure. Only the range goes to the client; the raw number and the steps stay with the developer. Short quotes are the least reliable: under 4h, the quoting figure held about two times in three.
 
